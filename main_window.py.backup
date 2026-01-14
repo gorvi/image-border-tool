@@ -1,0 +1,1125 @@
+"""
+主窗口模块
+"""
+
+import tkinter as tk
+from tkinter import ttk, filedialog, messagebox
+from PIL import Image
+import os
+from datetime import datetime
+
+from canvas_widget import CanvasWidget
+from image_processor import ImageProcessor, CompositeImage
+from constants import (SIZE_PRESETS, BORDER_STYLES, STICKER_LIST, COLORS, 
+                      BORDER_STYLES_WITH_PREVIEW, BORDER_CATEGORIES, 
+                      BORDER_COLORS, BORDER_STYLE_NAMES,
+                      BORDER_SHAPES, BORDER_LINE_STYLES, DEFAULT_BACKGROUNDS)
+from color_picker import ColorPicker
+from PIL import Image, ImageTk
+
+
+class MainWindow(tk.Tk):
+    """主窗口类"""
+    
+    def __init__(self):
+        super().__init__()
+        
+        self.title('图片套版工具')
+        
+        # 获取屏幕尺寸并设置窗口大小（屏幕的80%）
+        screen_width = self.winfo_screenwidth()
+        screen_height = self.winfo_screenheight()
+        window_width = int(screen_width * 0.85)
+        window_height = int(screen_height * 0.85)
+        
+        # 居中显示
+        x = (screen_width - window_width) // 2
+        y = (screen_height - window_height) // 2
+        
+        self.geometry(f'{window_width}x{window_height}+{x}+{y}')
+        self.minsize(1200, 700)  # 最小窗口尺寸
+        self.configure(bg=COLORS['bg'])
+        
+        # 初始化变量
+        self.image_processor = ImageProcessor()
+        self.current_size_preset = SIZE_PRESETS[2]  # 默认正方形
+        self.current_border = BORDER_STYLES[0]  # 默认无边框
+        self.batch_images = []  # 批量图片列表
+        self.sticker_images = {}  # 缓存贴纸图片
+        self.border_preview_images = {}  # 缓存边框预览图
+        self.sticker_photo_refs = []  # 保持图片引用，防止被垃圾回收
+        self.border_photo_refs = []  # 保持边框图片引用
+        
+        # 边框选择状态（旧版）
+        self.selected_border_category = 'modern'
+        self.selected_border_color = 'black'
+        
+        # 自定义边框配置
+        self.border_config = {
+            'shape': 'rectangle',
+            'line_style': 'solid',
+            'width': 10,
+            'radius': 0,
+            'color': '#000000',
+            'gradient': False,
+        }
+        
+        # 背景配置
+        self.background_color = '#FFFFFF'
+        self.background_image = None
+        
+        # 加载资源
+        self.load_sticker_images()
+        self.load_border_preview_images()
+        
+        # 历史记录
+        self.history = []
+        self.history_index = -1
+        
+        # 创建UI
+        self.create_widgets()
+        
+        # 绑定快捷键
+        self.bind('<Command-z>', lambda e: self.undo())
+        self.bind('<Command-Shift-Z>', lambda e: self.redo())
+        self.bind('<Command-s>', lambda e: self.export_image())
+        self.bind('<Configure>', self.on_window_resize)
+    
+    def on_window_resize(self, event):
+        """窗口大小改变时调整画布"""
+        if event.widget == self:
+            # 延迟调整，避免频繁触发
+            if hasattr(self, 'resize_timer'):
+                self.after_cancel(self.resize_timer)
+            self.resize_timer = self.after(100, self.adjust_canvas_display)
+    
+    def adjust_canvas_display(self):
+        """自适应调整画布显示"""
+        try:
+            if hasattr(self, 'canvas_widget') and hasattr(self, 'center_panel'):
+                # 获取中间面板实际大小
+                self.update_idletasks()
+                # 画布会自动适应，无需手动调整
+        except:
+            pass
+        
+    def create_widgets(self):
+        """创建界面组件 - 毛玻璃风格"""
+        # 主容器
+        main_container = tk.Frame(self, bg=COLORS['bg'])
+        main_container.pack(fill=tk.BOTH, expand=True)
+        
+        # 左侧可折叠面板容器
+        self.left_container = tk.Frame(main_container, bg=COLORS['bg'])
+        self.left_container.pack(side=tk.LEFT, fill=tk.Y)
+        
+        # 左侧面板框架
+        self.left_panel_frame = tk.Frame(self.left_container, bg=COLORS['bg'])
+        self.left_panel_frame.pack(side=tk.LEFT, fill=tk.Y)
+        
+        self.left_panel = self.create_left_panel(self.left_panel_frame)
+        self.left_panel.pack(fill=tk.BOTH, expand=True, padx=(8, 0), pady=8)
+        
+        # 折叠按钮
+        self.collapse_btn = tk.Button(
+            self.left_container,
+            text='◀',
+            command=self.toggle_left_panel,
+            font=('SF Pro Text', 16),
+            bg=COLORS['panel_bg'],
+            fg=COLORS['text_secondary'],
+            activebackground=COLORS['hover'],
+            relief=tk.FLAT,
+            width=2,
+            cursor='hand2',
+            bd=0,
+            highlightthickness=1,
+            highlightbackground=COLORS['separator'],
+            highlightcolor=COLORS['separator']
+        )
+        self.collapse_btn.pack(side=tk.RIGHT, fill=tk.Y, padx=(4, 0))
+        
+        self.left_panel_visible = True
+        
+        # 中间画布区域
+        self.center_panel = self.create_center_panel(main_container)
+        self.center_panel.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=8, pady=8)
+        
+        # 右侧面板
+        self.right_panel = self.create_right_panel(main_container)
+        self.right_panel.pack(side=tk.RIGHT, fill=tk.Y, padx=(0, 8), pady=8)
+    
+    def toggle_left_panel(self):
+        """切换左侧面板显示/隐藏"""
+        if self.left_panel_visible:
+            # 隐藏
+            self.left_panel_frame.pack_forget()
+            self.collapse_btn.config(text='▶')
+            self.left_panel_visible = False
+        else:
+            # 显示
+            self.left_panel_frame.pack(side=tk.LEFT, fill=tk.Y, before=self.collapse_btn)
+            self.collapse_btn.config(text='◀')
+            self.left_panel_visible = True
+    
+    def load_sticker_images(self):
+        """加载贴纸PNG图片"""
+        assets_dir = os.path.join(os.path.dirname(__file__), 'assets', 'stickers')
+        
+        for sticker in STICKER_LIST:
+            if 'file' in sticker:
+                img_path = os.path.join(assets_dir, sticker['file'])
+                if os.path.exists(img_path):
+                    try:
+                        # 加载并调整大小
+                        img = Image.open(img_path).convert('RGBA')
+                        img = img.resize((32, 32), Image.Resampling.LANCZOS)
+                        photo = ImageTk.PhotoImage(img)
+                        self.sticker_images[sticker['id']] = photo
+                        self.sticker_photo_refs.append(photo)  # 保持引用
+                    except Exception as e:
+                        print(f"加载贴纸失败 {sticker['file']}: {e}")
+    
+    def load_border_preview_images(self):
+        """加载边框预览图"""
+        frames_dir = os.path.join(os.path.dirname(__file__), 'assets', 'borders', 'frames')
+        
+        if not os.path.exists(frames_dir):
+            return
+        
+        # 加载所有边框预览图
+        for filename in os.listdir(frames_dir):
+            if filename.endswith('.png'):
+                try:
+                    img_path = os.path.join(frames_dir, filename)
+                    img = Image.open(img_path).convert('RGBA')
+                    # 缩小到缩略图尺寸
+                    img.thumbnail((60, 60), Image.Resampling.LANCZOS)
+                    photo = ImageTk.PhotoImage(img)
+                    border_id = filename.replace('.png', '')
+                    self.border_preview_images[border_id] = photo
+                    self.border_photo_refs.append(photo)
+                except Exception as e:
+                    print(f"加载边框预览失败 {filename}: {e}")
+    
+    def create_left_panel(self, parent):
+        """创建左侧面板 - 毛玻璃风格"""
+        panel = tk.Frame(
+            parent, 
+            bg=COLORS['panel_bg'], 
+            width=280,
+            relief=tk.FLAT,
+            bd=0,
+            highlightthickness=1,
+            highlightbackground=COLORS['separator'],
+            highlightcolor=COLORS['separator']
+        )
+        
+        # 尺寸选择 - 现代风格
+        size_label = tk.Label(
+            panel,
+            text='选择尺寸',
+            font=('SF Pro Display', 13, 'bold'),
+            bg=COLORS['panel_bg'],
+            fg=COLORS['text_primary'],
+            anchor='w'
+        )
+        size_label.pack(fill=tk.X, padx=16, pady=(16, 8))
+        
+        size_frame = tk.Frame(panel, bg=COLORS['panel_bg'])
+        size_frame.pack(fill=tk.X, padx=12, pady=(0, 12))
+        
+        for preset in SIZE_PRESETS:
+            btn = tk.Button(
+                size_frame,
+                text=f"{preset['name']}\n{preset['width']}×{preset['height']}",
+                command=lambda p=preset: self.select_size_preset(p),
+                bg='white',
+                fg=COLORS['text_primary'],
+                activebackground=COLORS['hover'],
+                relief=tk.FLAT,
+                font=('SF Pro Text', 11),
+                pady=12,
+                bd=0,
+                highlightthickness=1,
+                highlightbackground=COLORS['separator'],
+                highlightcolor=COLORS['accent'],
+                cursor='hand2'
+            )
+            btn.pack(fill=tk.X, padx=4, pady=3)
+            
+            # 鼠标悬停效果
+            def on_enter(e, b=btn):
+                b.config(bg=COLORS['hover'])
+            def on_leave(e, b=btn):
+                b.config(bg='white')
+            btn.bind('<Enter>', on_enter)
+            btn.bind('<Leave>', on_leave)
+        
+        # 分隔线
+        separator1 = tk.Frame(panel, bg=COLORS['separator'], height=1)
+        separator1.pack(fill=tk.X, padx=16, pady=8)
+        
+        # 上传图片 - 现代风格
+        upload_label = tk.Label(
+            panel,
+            text='图片操作',
+            font=('SF Pro Display', 13, 'bold'),
+            bg=COLORS['panel_bg'],
+            fg=COLORS['text_primary'],
+            anchor='w'
+        )
+        upload_label.pack(fill=tk.X, padx=16, pady=(8, 8))
+        
+        upload_frame = tk.Frame(panel, bg=COLORS['panel_bg'])
+        upload_frame.pack(fill=tk.X, padx=12, pady=(0, 12))
+        
+        upload_btn = tk.Button(
+            upload_frame,
+            text='📁 上传图片',
+            command=self.upload_image,
+            bg=COLORS['accent'],
+            fg='white',
+            activebackground='#0051D5',
+            font=('SF Pro Text', 12, 'bold'),
+            pady=12,
+            relief=tk.FLAT,
+            bd=0,
+            cursor='hand2'
+        )
+        upload_btn.pack(fill=tk.X, padx=4, pady=3)
+        
+        reset_btn = tk.Button(
+            upload_frame,
+            text='🔄 重置图片',
+            command=self.reset_image,
+            bg='white',
+            fg=COLORS['text_primary'],
+            activebackground=COLORS['hover'],
+            font=('SF Pro Text', 12),
+            pady=12,
+            relief=tk.FLAT,
+            bd=0,
+            highlightthickness=1,
+            highlightbackground=COLORS['separator'],
+            cursor='hand2'
+        )
+        reset_btn.pack(fill=tk.X, padx=4, pady=3)
+        
+        
+        return panel
+    
+    def create_center_panel(self, parent):
+        """创建中间画布面板 - 毛玻璃风格"""
+        panel = tk.Frame(
+            parent,
+            bg=COLORS['panel_bg'],
+            relief=tk.FLAT,
+            bd=0,
+            highlightthickness=1,
+            highlightbackground=COLORS['separator']
+        )
+        
+        # 工具栏 - 现代风格
+        toolbar = tk.Frame(panel, bg=COLORS['panel_bg'], height=56)
+        toolbar.pack(fill=tk.X, padx=12, pady=12)
+        
+        # 左侧按钮
+        left_buttons = tk.Frame(toolbar, bg=COLORS['panel_bg'])
+        left_buttons.pack(side=tk.LEFT)
+        
+        btn_undo = tk.Button(
+            left_buttons,
+            text='↶ 撤销',
+            command=self.undo,
+            font=('SF Pro Text', 11),
+            bg='white',
+            fg=COLORS['text_primary'],
+            activebackground=COLORS['hover'],
+            relief=tk.FLAT,
+            bd=0,
+            padx=16,
+            pady=8,
+            highlightthickness=1,
+            highlightbackground=COLORS['separator'],
+            cursor='hand2'
+        )
+        btn_undo.pack(side=tk.LEFT, padx=(0, 6))
+        
+        btn_redo = tk.Button(
+            left_buttons,
+            text='↷ 重做',
+            command=self.redo,
+            font=('SF Pro Text', 11),
+            bg='white',
+            fg=COLORS['text_primary'],
+            activebackground=COLORS['hover'],
+            relief=tk.FLAT,
+            bd=0,
+            padx=16,
+            pady=8,
+            highlightthickness=1,
+            highlightbackground=COLORS['separator'],
+            cursor='hand2'
+        )
+        btn_redo.pack(side=tk.LEFT, padx=(0, 6))
+        
+        btn_delete = tk.Button(
+            left_buttons,
+            text='🗑️ 删除贴纸',
+            command=self.delete_selected_sticker,
+            font=('SF Pro Text', 11),
+            bg='white',
+            fg=COLORS['danger'],
+            activebackground='#FFE5E5',
+            relief=tk.FLAT,
+            bd=0,
+            padx=16,
+            pady=8,
+            highlightthickness=1,
+            highlightbackground=COLORS['separator'],
+            cursor='hand2'
+        )
+        btn_delete.pack(side=tk.LEFT)
+        
+        # 右侧导出按钮
+        btn_export = tk.Button(
+            toolbar,
+            text='💾 导出图片',
+            command=self.export_image,
+            bg=COLORS['success'],
+            fg='white',
+            activebackground='#28A745',
+            font=('SF Pro Text', 12, 'bold'),
+            relief=tk.FLAT,
+            bd=0,
+            padx=20,
+            pady=10,
+            cursor='hand2'
+        )
+        btn_export.pack(side=tk.RIGHT)
+        
+        # 画布
+        self.canvas_widget = CanvasWidget(
+            panel,
+            width=self.current_size_preset['width'],
+            height=self.current_size_preset['height']
+        )
+        self.canvas_widget.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        return panel
+    
+    def create_right_panel(self, parent):
+        """创建右侧面板 - 标签页布局 - 毛玻璃风格"""
+        panel = tk.Frame(
+            parent,
+            bg=COLORS['panel_bg'],
+            width=320,
+            relief=tk.FLAT,
+            bd=0,
+            highlightthickness=1,
+            highlightbackground=COLORS['separator']
+        )
+        
+        # 配置 ttk 标签页样式
+        style = ttk.Style()
+        style.theme_use('default')
+        
+        # 配置标签页样式 - macOS 风格
+        style.configure(
+            'TNotebook',
+            background=COLORS['panel_bg'],
+            borderwidth=0,
+            relief='flat'
+        )
+        style.configure(
+            'TNotebook.Tab',
+            background='white',
+            foreground=COLORS['text_secondary'],
+            padding=[20, 10],
+            font=('SF Pro Text', 11),
+            borderwidth=0
+        )
+        style.map(
+            'TNotebook.Tab',
+            background=[('selected', COLORS['panel_bg'])],
+            foreground=[('selected', COLORS['accent'])],
+            expand=[('selected', [1, 1, 1, 0])]
+        )
+        
+        # 创建标签页
+        notebook = ttk.Notebook(panel, style='TNotebook')
+        notebook.pack(fill=tk.BOTH, expand=True, padx=0, pady=0)
+        
+        # 标签页1: 背景
+        background_tab = tk.Frame(notebook, bg=COLORS['panel_bg'])
+        notebook.add(background_tab, text='🎨 背景')
+        self.create_background_tab(background_tab)
+        
+        # 标签页2: 边框
+        border_tab = tk.Frame(notebook, bg=COLORS['panel_bg'])
+        notebook.add(border_tab, text='🖼️ 边框')
+        self.create_border_tab(border_tab)
+        
+        # 标签页3: 贴纸
+        sticker_tab = tk.Frame(notebook, bg=COLORS['panel_bg'])
+        notebook.add(sticker_tab, text='✨ 贴纸')
+        self.create_sticker_tab(sticker_tab)
+        
+        # 标签页4: 基础编辑
+        basic_tab = tk.Frame(notebook, bg=COLORS['panel_bg'])
+        notebook.add(basic_tab, text='📐 编辑')
+        self.create_basic_tools_tab(basic_tab)
+        
+        # 标签页5: 批量
+        batch_tab = tk.Frame(notebook, bg=COLORS['panel_bg'])
+        notebook.add(batch_tab, text='⚡ 批量')
+        self.create_batch_tab(batch_tab)
+        
+        return panel
+    
+    def create_basic_tools_tab(self, parent):
+        """基础工具标签页 - 现代风格"""
+        # 图片操作标题
+        img_label = tk.Label(
+            parent,
+            text='图片操作',
+            font=('SF Pro Display', 13, 'bold'),
+            bg=COLORS['panel_bg'],
+            fg=COLORS['text_primary'],
+            anchor='w'
+        )
+        img_label.pack(fill=tk.X, padx=16, pady=(16, 12))
+        
+        img_frame = tk.Frame(parent, bg=COLORS['panel_bg'])
+        img_frame.pack(fill=tk.X, padx=12, pady=(0, 12))
+        
+        tools = [
+            ('↺ 逆时针旋转90°', lambda: self.rotate_image(-90)),
+            ('↻ 顺时针旋转90°', lambda: self.rotate_image(90)),
+            ('⇄ 水平翻转', lambda: self.flip_image('horizontal')),
+            ('⇅ 垂直翻转', lambda: self.flip_image('vertical')),
+        ]
+        
+        for text, command in tools:
+            btn = tk.Button(
+                img_frame,
+                text=text,
+                command=command,
+                bg='white',
+                fg=COLORS['text_primary'],
+                activebackground=COLORS['hover'],
+                font=('SF Pro Text', 11),
+                pady=12,
+                relief=tk.FLAT,
+                bd=0,
+                highlightthickness=1,
+                highlightbackground=COLORS['separator'],
+                cursor='hand2'
+            )
+            btn.pack(fill=tk.X, padx=4, pady=3)
+        
+        # 提示信息
+        tip_label = tk.Label(
+            parent,
+            text='💡 提示：点击画布上的贴纸可拖拽移动',
+            font=('SF Pro Text', 10),
+            fg=COLORS['text_secondary'],
+            bg=COLORS['panel_bg'],
+            wraplength=280,
+            justify='left'
+        )
+        tip_label.pack(fill=tk.X, padx=16, pady=24)
+    
+    def create_decoration_tab(self, parent):
+        """装饰标签页 - 现代风格"""
+        # 贴纸部分
+        sticker_label = tk.Label(
+            parent,
+            text='贴纸',
+            font=('SF Pro Display', 13, 'bold'),
+            bg=COLORS['panel_bg'],
+            fg=COLORS['text_primary'],
+            anchor='w'
+        )
+        sticker_label.pack(fill=tk.X, padx=16, pady=(16, 8))
+        
+        # 贴纸网格
+        sticker_grid = tk.Frame(parent, bg=COLORS['panel_bg'])
+        sticker_grid.pack(fill=tk.X, padx=12, pady=(0, 16))
+        
+        for idx, sticker in enumerate(STICKER_LIST):
+            row = idx // 4
+            col = idx % 4
+            
+            # 优先使用PNG图片，否则使用emoji
+            if sticker['id'] in self.sticker_images:
+                # 使用PNG图片
+                btn = tk.Button(
+                    sticker_grid,
+                    image=self.sticker_images[sticker['id']],
+                    command=lambda s=sticker: self.add_sticker(s),
+                    bg='white',
+                    activebackground=COLORS['hover'],
+                    relief=tk.FLAT,
+                    width=40,
+                    height=40,
+                    bd=0,
+                    highlightthickness=1,
+                    highlightbackground=COLORS['separator'],
+                    cursor='hand2'
+                )
+            else:
+                # 使用emoji
+                btn = tk.Button(
+                    sticker_grid,
+                    text=sticker['emoji'],
+                    font=('Apple Color Emoji', 28),
+                    command=lambda s=sticker: self.add_sticker(s),
+                    bg='white',
+                    activebackground=COLORS['hover'],
+                    relief=tk.FLAT,
+                    width=2,
+                    height=1,
+                    bd=0,
+                    highlightthickness=1,
+                    highlightbackground=COLORS['separator'],
+                    cursor='hand2'
+                )
+            btn.grid(row=row, column=col, padx=4, pady=4)
+        
+        # 分隔线
+        separator = tk.Frame(parent, bg=COLORS['separator'], height=1)
+        separator.pack(fill=tk.X, padx=16, pady=12)
+        
+        # 边框部分
+        border_label = tk.Label(
+            parent,
+            text='边框',
+            font=('SF Pro Display', 13, 'bold'),
+            bg=COLORS['panel_bg'],
+            fg=COLORS['text_primary'],
+            anchor='w'
+        )
+        border_label.pack(fill=tk.X, padx=16, pady=(8, 8))
+        
+        # 边框分类选择
+        category_frame = tk.Frame(parent, bg=COLORS['panel_bg'])
+        category_frame.pack(fill=tk.X, padx=16, pady=(0, 8))
+        
+        self.border_category_buttons = {}
+        for category_id, category_info in BORDER_CATEGORIES.items():
+            btn = tk.Button(
+                category_frame,
+                text=category_info['name'],
+                command=lambda c=category_id: self.select_border_category(c),
+                bg='white' if category_id == self.selected_border_category else COLORS['hover'],
+                fg=COLORS['accent'] if category_id == self.selected_border_category else COLORS['text_secondary'],
+                activebackground=COLORS['hover'],
+                relief=tk.FLAT,
+                font=('SF Pro Text', 10, 'bold' if category_id == self.selected_border_category else 'normal'),
+                padx=12,
+                pady=8,
+                bd=0,
+                highlightthickness=1,
+                highlightbackground=COLORS['separator'],
+                cursor='hand2'
+            )
+            btn.pack(side=tk.LEFT, padx=2)
+            self.border_category_buttons[category_id] = btn
+        
+        # 颜色选择
+        color_label = tk.Label(
+            parent,
+            text='颜色',
+            font=('SF Pro Text', 11),
+            bg=COLORS['panel_bg'],
+            fg=COLORS['text_secondary'],
+            anchor='w'
+        )
+        color_label.pack(fill=tk.X, padx=16, pady=(8, 4))
+        
+        color_grid = tk.Frame(parent, bg=COLORS['panel_bg'])
+        color_grid.pack(fill=tk.X, padx=16, pady=(0, 8))
+        
+        self.border_color_buttons = {}
+        current_category = BORDER_CATEGORIES[self.selected_border_category]
+        for idx, color_id in enumerate(current_category['colors']):
+            if color_id in BORDER_COLORS:
+                color_info = BORDER_COLORS[color_id]
+                row = idx // 6
+                col = idx % 6
+                
+                btn = tk.Button(
+                    color_grid,
+                    bg=color_info['preview'],
+                    activebackground=color_info['hex'],
+                    relief=tk.FLAT,
+                    width=3,
+                    height=1,
+                    bd=0,
+                    highlightthickness=2 if color_id == self.selected_border_color else 1,
+                    highlightbackground=COLORS['accent'] if color_id == self.selected_border_color else COLORS['separator'],
+                    cursor='hand2',
+                    command=lambda c=color_id: self.select_border_color(c)
+                )
+                btn.grid(row=row, column=col, padx=3, pady=3)
+                self.border_color_buttons[color_id] = btn
+        
+        # 边框样式网格（滚动）
+        style_container = tk.Frame(parent, bg=COLORS['panel_bg'])
+        style_container.pack(fill=tk.BOTH, expand=True, padx=12, pady=(0, 12))
+        
+        style_canvas = tk.Canvas(
+            style_container,
+            bg=COLORS['panel_bg'],
+            highlightthickness=0,
+            bd=0
+        )
+        style_scrollbar = tk.Scrollbar(
+            style_container,
+            orient='vertical',
+            command=style_canvas.yview
+        )
+        self.border_style_frame = tk.Frame(style_canvas, bg=COLORS['panel_bg'])
+        
+        style_canvas.create_window((0, 0), window=self.border_style_frame, anchor='nw')
+        style_canvas.configure(yscrollcommand=style_scrollbar.set)
+        
+        # 初始化边框样式显示
+        self.update_border_styles_display()
+        
+        self.border_style_frame.update_idletasks()
+        style_canvas.config(scrollregion=style_canvas.bbox('all'))
+        
+        style_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        style_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+    
+    def select_border_category(self, category_id):
+        """选择边框分类"""
+        self.selected_border_category = category_id
+        
+        # 更新分类按钮样式
+        for cat_id, btn in self.border_category_buttons.items():
+            if cat_id == category_id:
+                btn.config(
+                    bg='white',
+                    fg=COLORS['accent'],
+                    font=('SF Pro Text', 10, 'bold')
+                )
+            else:
+                btn.config(
+                    bg=COLORS['hover'],
+                    fg=COLORS['text_secondary'],
+                    font=('SF Pro Text', 10)
+                )
+        
+        # 更新边框样式显示
+        self.update_border_styles_display()
+    
+    def select_border_color(self, color_id):
+        """选择边框颜色"""
+        self.selected_border_color = color_id
+        
+        # 更新颜色按钮样式
+        for c_id, btn in self.border_color_buttons.items():
+            if c_id == color_id:
+                btn.config(highlightthickness=2, highlightbackground=COLORS['accent'])
+            else:
+                btn.config(highlightthickness=1, highlightbackground=COLORS['separator'])
+        
+        # 更新边框样式显示
+        self.update_border_styles_display()
+    
+    def update_border_styles_display(self):
+        """更新边框样式显示"""
+        # 清空现有内容
+        for widget in self.border_style_frame.winfo_children():
+            widget.destroy()
+        
+        # 获取当前分类的样式
+        category = BORDER_CATEGORIES[self.selected_border_category]
+        
+        for style in category['styles']:
+            # 构建边框ID
+            border_id = f"{self.selected_border_category}_{style}_{self.selected_border_color}"
+            
+            # 创建边框按钮
+            btn_frame = tk.Frame(self.border_style_frame, bg='white', highlightthickness=1, highlightbackground=COLORS['separator'])
+            btn_frame.pack(fill=tk.X, padx=4, pady=4)
+            
+            # 如果有预览图，显示预览图
+            if border_id in self.border_preview_images:
+                img_label = tk.Label(
+                    btn_frame,
+                    image=self.border_preview_images[border_id],
+                    bg='white',
+                    cursor='hand2'
+                )
+                img_label.pack(side=tk.LEFT, padx=8, pady=8)
+                img_label.bind('<Button-1>', lambda e, bid=border_id: self.apply_border(bid))
+            
+            # 显示边框名称
+            name = BORDER_STYLE_NAMES.get(style, style)
+            color_name = BORDER_COLORS.get(self.selected_border_color, {}).get('name', '')
+            full_name = f"{name} - {color_name}"
+            
+            name_label = tk.Label(
+                btn_frame,
+                text=full_name,
+                font=('SF Pro Text', 11),
+                bg='white',
+                fg=COLORS['text_primary'],
+                anchor='w',
+                cursor='hand2'
+            )
+            name_label.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=8, pady=12)
+            name_label.bind('<Button-1>', lambda e, bid=border_id: self.apply_border(bid))
+            
+            # 悬停效果
+            def on_enter(e, frame=btn_frame):
+                frame.config(bg=COLORS['hover'])
+                for child in frame.winfo_children():
+                    child.config(bg=COLORS['hover'])
+            
+            def on_leave(e, frame=btn_frame):
+                frame.config(bg='white')
+                for child in frame.winfo_children():
+                    child.config(bg='white')
+            
+            btn_frame.bind('<Enter>', on_enter)
+            btn_frame.bind('<Leave>', on_leave)
+            for child in btn_frame.winfo_children():
+                child.bind('<Enter>', on_enter)
+                child.bind('<Leave>', on_leave)
+    
+    def apply_border(self, border_id):
+        """应用边框 - 直接生效"""
+        # 解析border_id: category_style_color
+        parts = border_id.split('_')
+        if len(parts) >= 3:
+            category = parts[0]
+            style = parts[1]
+            color = parts[2]
+            
+            # 加载边框图片
+            frames_dir = os.path.join(os.path.dirname(__file__), 'assets', 'borders', 'frames')
+            border_path = os.path.join(frames_dir, f"{border_id}.png")
+            
+            if os.path.exists(border_path):
+                try:
+                    # 应用到画布
+                    border_img = Image.open(border_path).convert('RGBA')
+                    self.canvas_widget.apply_border_image(border_img)
+                    print(f"✓ 边框已应用: {border_id}")
+                except Exception as e:
+                    print(f"应用边框失败: {e}")
+            else:
+                print(f"边框文件不存在: {border_path}")
+    
+    def create_batch_tab(self, parent):
+        """批量处理标签页 - 现代风格"""
+        batch_frame = tk.Frame(parent, bg=COLORS['panel_bg'])
+        batch_frame.pack(fill=tk.BOTH, expand=True, padx=16, pady=16)
+        
+        # 说明文字
+        desc_label = tk.Label(
+            batch_frame,
+            text='批量处理可将当前设置的贴纸和边框\n应用到多张图片上',
+            font=('SF Pro Text', 11),
+            bg=COLORS['panel_bg'],
+            fg=COLORS['text_secondary'],
+            justify=tk.LEFT
+        )
+        desc_label.pack(pady=(0, 24))
+        
+        batch_upload_btn = tk.Button(
+            batch_frame,
+            text='📁 批量上传图片',
+            command=self.batch_upload,
+            bg=COLORS['warning'],
+            fg='white',
+            activebackground='#E68A00',
+            font=('SF Pro Text', 12, 'bold'),
+            pady=14,
+            relief=tk.FLAT,
+            bd=0,
+            cursor='hand2'
+        )
+        batch_upload_btn.pack(fill=tk.X, pady=6)
+        
+        self.batch_count_label = tk.Label(
+            batch_frame,
+            text='已选择: 0 张图片',
+            bg=COLORS['panel_bg'],
+            fg=COLORS['text_primary'],
+            font=('SF Pro Display', 12, 'bold')
+        )
+        self.batch_count_label.pack(pady=12)
+        
+        batch_export_btn = tk.Button(
+            batch_frame,
+            text='⚡ 批量生成并导出',
+            command=self.batch_export,
+            bg=COLORS['success'],
+            fg='white',
+            activebackground='#28A745',
+            font=('SF Pro Text', 12, 'bold'),
+            pady=14,
+            relief=tk.FLAT,
+            bd=0,
+            cursor='hand2'
+        )
+        batch_export_btn.pack(fill=tk.X, pady=6)
+        
+        # 批量处理提示
+        tip_text = """
+使用步骤：
+1. 先上传一张样例图片
+2. 添加贴纸和边框
+3. 点击"批量上传图片"
+4. 点击"批量生成"即可
+
+注意：批量处理会将当前画布
+上的贴纸和边框应用到所有图片
+        """
+        tip_label = tk.Label(
+            batch_frame,
+            text=tip_text,
+            font=('Arial', 9),
+            bg=COLORS['bg'],
+            fg='#666',
+            justify=tk.LEFT,
+            padx=10,
+            pady=10
+        )
+        tip_label.pack(fill=tk.X, pady=20)
+    
+    def select_size_preset(self, preset):
+        """选择尺寸预设"""
+        self.current_size_preset = preset
+        self.image_processor.set_canvas_size(preset['width'], preset['height'])
+        self.canvas_widget.resize_canvas(preset['width'], preset['height'])
+        
+        # 如果已有图片，重新调整大小
+        if self.image_processor.current_image:
+            self.refresh_canvas()
+        
+        messagebox.showinfo('尺寸设置', f"已设置为: {preset['name']}")
+    
+    def upload_image(self):
+        """上传图片"""
+        file_path = filedialog.askopenfilename(
+            title='选择图片',
+            filetypes=[
+                ('图片文件', '*.jpg *.jpeg *.png *.bmp *.gif'),
+                ('所有文件', '*.*')
+            ]
+        )
+        
+        if file_path:
+            if self.image_processor.load_image(file_path):
+                self.image_processor.resize_to_canvas(maintain_ratio=True)
+                self.refresh_canvas()
+                self.save_history()
+                messagebox.showinfo('成功', '图片上传成功！')
+            else:
+                messagebox.showerror('错误', '图片加载失败！')
+    
+    def reset_image(self):
+        """重置图片"""
+        self.image_processor.reset_image()
+        if self.image_processor.current_image:
+            self.image_processor.resize_to_canvas(maintain_ratio=True)
+            self.refresh_canvas()
+            self.save_history()
+    
+    def add_sticker(self, sticker):
+        """添加贴纸"""
+        # 如果有PNG图片文件，优先使用图片
+        sticker_path = os.path.join(os.path.dirname(__file__), 'assets', 'stickers', sticker.get('file', ''))
+        if os.path.exists(sticker_path):
+            try:
+                # 加载PNG贴纸，但还是用emoji显示（因为canvas_widget当前使用emoji）
+                # TODO: 后续可以支持真正的图片贴纸
+                self.canvas_widget.add_sticker(sticker['emoji'], font_size=48)
+            except Exception as e:
+                print(f"加载贴纸图片失败: {e}")
+                self.canvas_widget.add_sticker(sticker['emoji'], font_size=48)
+        else:
+            self.canvas_widget.add_sticker(sticker['emoji'], font_size=48)
+        
+        self.save_history()
+    
+    def rotate_image(self, angle):
+        """旋转图片"""
+        if self.image_processor.base_image:
+            rotated = self.image_processor.base_image.rotate(angle, expand=True)
+            self.image_processor.base_image = rotated
+            self.image_processor.current_image = rotated
+            self.image_processor.resize_to_canvas(maintain_ratio=True)
+            self.refresh_canvas()
+            self.save_history()
+    
+    def flip_image(self, direction):
+        """翻转图片"""
+        if self.image_processor.base_image:
+            from PIL import Image as PILImage
+            if direction == 'horizontal':
+                flipped = self.image_processor.base_image.transpose(PILImage.FLIP_LEFT_RIGHT)
+            else:  # vertical
+                flipped = self.image_processor.base_image.transpose(PILImage.FLIP_TOP_BOTTOM)
+            
+            self.image_processor.base_image = flipped
+            self.image_processor.current_image = flipped
+            self.image_processor.resize_to_canvas(maintain_ratio=True)
+            self.refresh_canvas()
+            self.save_history()
+    
+    def select_border(self, border):
+        """选择边框"""
+        self.current_border = border
+        self.canvas_widget.add_border(border)
+        self.save_history()
+    
+    def delete_selected_sticker(self):
+        """删除选中的贴纸"""
+        if self.canvas_widget.delete_selected_sticker():
+            self.save_history()
+            messagebox.showinfo('成功', '贴纸已删除')
+        else:
+            messagebox.showwarning('提示', '请先点击选择要删除的贴纸')
+    
+    def refresh_canvas(self):
+        """刷新画布"""
+        current_image = self.image_processor.get_current_image()
+        if current_image:
+            self.canvas_widget.display_image(current_image)
+            self.canvas_widget.add_border(self.current_border)
+    
+    def export_image(self):
+        """导出图片"""
+        if not self.image_processor.current_image:
+            messagebox.showwarning('提示', '请先上传图片！')
+            return
+        
+        # 生成默认文件名
+        default_name = f"tupian_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+        
+        file_path = filedialog.asksaveasfilename(
+            title='保存图片',
+            defaultextension='.png',
+            initialfile=default_name,
+            filetypes=[
+                ('PNG图片', '*.png'),
+                ('JPEG图片', '*.jpg'),
+                ('所有文件', '*.*')
+            ]
+        )
+        
+        if file_path:
+            # 生成最终图片
+            composite = CompositeImage(
+                self.current_size_preset['width'],
+                self.current_size_preset['height']
+            )
+            
+            # 添加主图片
+            composite.add_main_image(self.image_processor.current_image, fit_mode='contain')
+            
+            # 添加贴纸
+            for sticker in self.canvas_widget.get_stickers():
+                composite.add_sticker(sticker['text'], sticker['x'], sticker['y'], sticker['size'])
+            
+            # 添加边框
+            if 'rounded' in self.current_border['id']:
+                composite.add_rounded_border(self.current_border)
+            else:
+                composite.add_border(self.current_border)
+            
+            # 保存
+            if composite.save(file_path):
+                messagebox.showinfo('成功', f'图片已保存到:\n{file_path}')
+            else:
+                messagebox.showerror('错误', '保存失败！')
+    
+    def batch_upload(self):
+        """批量上传图片"""
+        file_paths = filedialog.askopenfilenames(
+            title='批量选择图片',
+            filetypes=[
+                ('图片文件', '*.jpg *.jpeg *.png *.bmp *.gif'),
+                ('所有文件', '*.*')
+            ]
+        )
+        
+        if file_paths:
+            self.batch_images = list(file_paths)
+            self.batch_count_label.config(text=f'已选择: {len(self.batch_images)} 张图片')
+            messagebox.showinfo('成功', f'已选择 {len(self.batch_images)} 张图片')
+    
+    def batch_export(self):
+        """批量导出图片"""
+        if not self.batch_images:
+            messagebox.showwarning('提示', '请先批量上传图片！')
+            return
+        
+        # 选择输出目录
+        output_dir = filedialog.askdirectory(title='选择输出目录')
+        if not output_dir:
+            return
+        
+        success_count = 0
+        
+        for idx, img_path in enumerate(self.batch_images):
+            try:
+                # 加载图片
+                processor = ImageProcessor()
+                processor.load_image(img_path)
+                processor.set_canvas_size(
+                    self.current_size_preset['width'],
+                    self.current_size_preset['height']
+                )
+                processor.resize_to_canvas(maintain_ratio=True)
+                
+                # 生成复合图片
+                composite = CompositeImage(
+                    self.current_size_preset['width'],
+                    self.current_size_preset['height']
+                )
+                composite.add_main_image(processor.current_image, fit_mode='contain')
+                
+                # 添加贴纸（使用当前画布的贴纸）
+                for sticker in self.canvas_widget.get_stickers():
+                    composite.add_sticker(sticker['text'], sticker['x'], sticker['y'], sticker['size'])
+                
+                # 添加边框
+                if 'rounded' in self.current_border['id']:
+                    composite.add_rounded_border(self.current_border)
+                else:
+                    composite.add_border(self.current_border)
+                
+                # 保存
+                filename = f"processed_{idx+1}_{os.path.basename(img_path)}"
+                output_path = os.path.join(output_dir, filename)
+                
+                if composite.save(output_path):
+                    success_count += 1
+                
+            except Exception as e:
+                print(f"处理图片 {img_path} 失败: {e}")
+        
+        messagebox.showinfo('完成', f'批量处理完成！\n成功: {success_count}/{len(self.batch_images)}')
+    
+    def save_history(self):
+        """保存历史记录"""
+        # 简单的历史记录实现
+        pass
+    
+    def undo(self):
+        """撤销"""
+        messagebox.showinfo('提示', '撤销功能开发中...')
+    
+    def redo(self):
+        """重做"""
+        messagebox.showinfo('提示', '重做功能开发中...')

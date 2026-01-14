@@ -1,0 +1,23 @@
+========================================
+  快速安装命令（复制到终端运行）
+========================================
+
+请打开终端，复制并运行以下命令：
+
+cd /Users/ghw/Documents/cursor_ws/tupian && ./install_python.sh
+
+或者手动执行：
+
+1. 安装 Homebrew:
+   /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+
+2. 安装 Python:
+   /opt/homebrew/bin/brew install python3
+
+3. 安装依赖:
+   /opt/homebrew/bin/python3 -m pip install --user -r requirements.txt
+
+4. 运行程序:
+   /opt/homebrew/bin/python3 main.py
+
+========================================
