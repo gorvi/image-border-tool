@@ -127,8 +127,11 @@ class MainWindow(tk.Tk):
         }
         
         # 批量文字配置
-        self.batch_text_dir = ''  # 文本目录
-        self.batch_use_text_dir = tk.BooleanVar(value=False)  # 使用文本目录
+        self.batch_text_file = ''  # 文本文件路径
+        self.batch_text_lines = []  # 文本文件内容行列表
+        self.batch_use_text_file = tk.BooleanVar(value=False)  # 使用文本文件
+        self.batch_use_text_dir = tk.BooleanVar(value=False)  # 已废弃，保留兼容性
+        self.batch_text_dir = ''  # 已废弃，保留兼容性
         
         # 加载用户设置
         self.load_settings()
@@ -438,8 +441,12 @@ class MainWindow(tk.Tk):
 
     def apply_default_border(self):
         """应用默认边框"""
-        self.canvas_widget.apply_custom_border(self.border_config)
-        print("✓ 默认边框已应用")
+        try:
+            if hasattr(self, 'canvas_widget') and self.canvas_widget:
+                self.canvas_widget.apply_custom_border(self.border_config)
+                print("✓ 默认边框已应用")
+        except Exception as e:
+            print(f"忽略边框应用错误: {e}")
     
     def bind_mousewheel(self, content_widget, scroll_widget=None):
         """绑定鼠标滚轮事件
@@ -1428,7 +1435,8 @@ class MainWindow(tk.Tk):
         font_combo.pack(side=tk.LEFT, padx=4)
         
         def on_font_change(event):
-            self.update_text_preview()
+            # 字体改变时直接触发自动应用
+            self._auto_apply_text()
             
         font_combo.bind('<<ComboboxSelected>>', on_font_change)
         
@@ -1465,7 +1473,7 @@ class MainWindow(tk.Tk):
         basic_frame.pack(anchor='w', pady=2)
         basic_colors = ['#333333', '#000000', '#FFFFFF', '#FF2D55', '#FF9500', '#34C759', '#007AFF']
         for c in basic_colors:
-            cb = tk.Canvas(basic_frame, width=18, height=18, bg=c, highlightthickness=1,
+            cb = tk.Canvas(basic_frame, width=36, height=24, bg=c, highlightthickness=1,
                           highlightbackground=COLORS['separator'], cursor='hand2')
             cb.pack(side=tk.LEFT, padx=1)
             cb.bind('<Button-1>', lambda e, color=c: self.set_text_color(color))
@@ -1475,7 +1483,7 @@ class MainWindow(tk.Tk):
         macaron_frame = tk.Frame(color_section, bg=COLORS['panel_bg'])
         macaron_frame.pack(anchor='w', pady=2)
         for c in MACARON_COLORS[:9]:
-            cb = tk.Canvas(macaron_frame, width=18, height=18, bg=c, highlightthickness=1,
+            cb = tk.Canvas(macaron_frame, width=36, height=24, bg=c, highlightthickness=1,
                           highlightbackground=COLORS['separator'], cursor='hand2')
             cb.pack(side=tk.LEFT, padx=1)
             cb.bind('<Button-1>', lambda e, color=c: self.set_text_color(color))
@@ -1484,7 +1492,7 @@ class MainWindow(tk.Tk):
         dopamine_frame = tk.Frame(color_section, bg=COLORS['panel_bg'])
         dopamine_frame.pack(anchor='w', pady=2)
         for c in DOPAMINE_COLORS[:9]:
-            cb = tk.Canvas(dopamine_frame, width=18, height=18, bg=c, highlightthickness=1,
+            cb = tk.Canvas(dopamine_frame, width=36, height=24, bg=c, highlightthickness=1,
                           highlightbackground=COLORS['separator'], cursor='hand2')
             cb.pack(side=tk.LEFT, padx=1)
             cb.bind('<Button-1>', lambda e, color=c: self.set_text_color(color))
@@ -1623,6 +1631,9 @@ class MainWindow(tk.Tk):
         """文字内容输入时触发 - 带防抖的自动关键词检测"""
         content = self.text_content_entry.get('1.0', 'end-1c').strip() if hasattr(self, 'text_content_entry') else ''
         
+        # 立即应用文字到画布
+        self._auto_apply_text()
+        
         # 检查内容是否变化
         last_content = getattr(self, '_last_text_content', '')
         if content != last_content:
@@ -1634,10 +1645,6 @@ class MainWindow(tk.Tk):
             
             # 延迟 800ms 后自动检测关键词 (防抖)
             self._keyword_detect_job = self.after(800, self._auto_detect_silent)
-        else:
-            # 内容没变，只更新样式
-            self._auto_apply_text()
-        self._keyword_detect_job = self.after(800, self._auto_detect_silent)
     
     def _auto_detect_silent(self):
         """静默自动检测关键词并自动应用到画布"""
@@ -1765,6 +1772,13 @@ class MainWindow(tk.Tk):
                 self.current_text_layer.rel_x = x / cw
                 self.current_text_layer.rel_y = y / ch
                 # 标记为自定义位置
+                self.current_text_layer.position = 'custom'
+        elif action == 'scale':
+            # 缩放文字
+            factor = kwargs.get('factor', 1.0)
+            self.current_text_layer.font_size = int(self.current_text_layer.font_size * factor)
+            # 重新渲染文字
+            self._auto_apply_text()
                 self.current_text_layer.position = 'custom'
                 
         elif action == 'scale':
@@ -2057,12 +2071,12 @@ class MainWindow(tk.Tk):
             activebackground=COLORS['panel_bg']
         ).pack(anchor='w', pady=(0, 15))
 
-        # --- 文字目录设置 ---
-        text_dir_frame = tk.LabelFrame(batch_frame, text='🔤 批量文字', 
+        # --- 文字文件设置 ---
+        text_file_frame = tk.LabelFrame(batch_frame, text='🔤 批量文字', 
                                        font=('SF Pro Text', 10, 'bold'),
                                        bg=COLORS['panel_bg'], fg=COLORS['text_secondary'],
                                        padx=10, pady=8, bd=1, relief='flat')
-        text_dir_frame.pack(fill=tk.X, padx=12, pady=(0, 12))
+        text_file_frame.pack(fill=tk.X, padx=12, pady=(0, 12))
         
         # 启用文字目录勾选框
         tk.Checkbutton(text_dir_frame, text='从 .txt 文件读取文字', variable=self.batch_use_text_dir,
@@ -2687,6 +2701,15 @@ class MainWindow(tk.Tk):
             if hasattr(self, 'text_dir_label'):
                 self.text_dir_label.config(text=dir_path)
             self.save_settings()
+
+    def select_text_file(self):
+        """选择文字文件"""
+        file_path = filedialog.askopenfilename(title='选择txt文档', filetypes=[('txt files', '*.txt')], initialdir=self.batch_text_file or None)
+        if file_path:
+            self.batch_text_file = file_path
+            if hasattr(self, 'text_file_label'):
+                self.text_file_label.config(text=file_path)
+            self.save_settings()
     
     def show_toast(self, message, duration=2000):
         """显示非阻塞的 Toast 提示"""
@@ -2828,17 +2851,29 @@ class MainWindow(tk.Tk):
             messagebox.showwarning('提示', '请先加载图片！')
             return
         
-        # 使用记忆的输出目录或选择新目录
-        output_dir = self.batch_output_dir
-        if not output_dir or not os.path.isdir(output_dir):
-            output_dir = filedialog.askdirectory(title='选择输出目录', initialdir=self.batch_output_dir or None)
-            if output_dir:
-                self.batch_output_dir = output_dir
-                if hasattr(self, 'output_dir_label'):
-                    self.output_dir_label.config(text=output_dir)
-                self.save_settings()
+        # 使用预先选择的txt文档
+        if self.batch_text_file and os.path.exists(self.batch_text_file):
+            try:
+                with open(self.batch_text_file, 'r', encoding='utf-8') as f:
+                    self.batch_text_lines = [line.strip() for line in f if line.strip()]
+                
+                # 验证行数是否匹配
+                if len(self.batch_text_lines) != len(self.batch_images):
+                    messagebox.showwarning(
+                        '提示', 
+                        f'⚠️ txt文档有 {len(self.batch_text_lines)} 行，而图片有 {len(self.batch_images)} 张\n\n将按顺序使用文字，多余图片将不添加文字'
+                    )
+                else:
+                    messagebox.showinfo('提示', f'✅ 已成功加载 {len(self.batch_text_lines)} 行文字')
+            except Exception as e:
+                messagebox.showerror('错误', f'读取txt文档失败：{str(e)}')
+                return
         
-        if not output_dir:
+        # 使用预先选择的txt文档的所在目录作为输出目录
+        if self.batch_text_file and os.path.exists(self.batch_text_file):
+            output_dir = os.path.dirname(self.batch_text_file)
+        else:
+            messagebox.showwarning('提示', '请先选择txt文档！')
             return
         
         # 确定要处理的图片列表
@@ -3062,30 +3097,13 @@ class MainWindow(tk.Tk):
                 # 6. 添加文字层
                 text_content = None
                 
-                # 方式1: 从文本目录读取对应的 .txt 文件
-                if self.batch_use_text_dir.get() and self.batch_text_dir:
-                    base_name = os.path.splitext(filename)[0]
-                    txt_path = os.path.join(self.batch_text_dir, base_name + '.txt')
-                    
-                    if os.path.exists(txt_path):
-                        try:
-                            with open(txt_path, 'r', encoding='utf-8') as f:
-                                text_content = f.read().strip()
-                            self.batch_log(f"  文字: 从 {base_name}.txt 读取")
-                        except Exception as e:
-                            self.batch_log(f"  文字: 读取失败 - {e}")
-                    else:
-                        # 尝试 default.txt
-                        default_txt = os.path.join(self.batch_text_dir, 'default.txt')
-                        if os.path.exists(default_txt):
-                            try:
-                                with open(default_txt, 'r', encoding='utf-8') as f:
-                                    text_content = f.read().strip()
-                                self.batch_log(f"  文字: 使用 default.txt")
-                            except:
-                                pass
+                # 方式1: 从txt文档的行读取
+                if hasattr(self, 'batch_text_lines') and idx < len(self.batch_text_lines):
+                    text_content = self.batch_text_lines[idx]
+                    if text_content:
+                        self.batch_log(f"  文字: 第 {idx+1} 行")
                 
-                # 方式2: 使用编辑器中的文字配置 (如果没有从文件读取)
+                # 方式3: 使用编辑器中的文字配置 (如果没有从文件读取)
                 elif self.text_layers and len(self.text_layers) > 0:
                     text_layer = self.text_layers[0]
                     text_content = text_layer.content
