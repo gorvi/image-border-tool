@@ -122,19 +122,37 @@ class CanvasWidget(tk.Frame):
         """统一管理画布图层顺序：背景 < 图案 < 图片 < 贴纸 < 边框 < 手柄"""
         # 按从底到顶的顺序设置
         # 1. 背景最底层
-        self.canvas.tag_lower('background_image')
+        try:
+            self.canvas.tag_lower('background_image')
+        except:
+            pass
         # 2. 背景图案
-        self.canvas.tag_raise('background_pattern', 'background_image')
+        try:
+            self.canvas.tag_raise('background_pattern', 'background_image')
+        except:
+            pass
         # 3. 内容层 (图片、贴纸、文字) 之间的顺序由用户控制，不在这里强制
         # 4. 边框 (必须在所有内容之上)
         # 找到所有内容元素
         for tag in ['main_image', 'sticker', 'text_layer']:
-            self.canvas.tag_raise('corner_mask', tag)
+            try:
+                self.canvas.tag_raise('corner_mask', tag)
+            except:
+                pass
         
-        self.canvas.tag_raise('border', 'corner_mask')
-        self.canvas.tag_raise('border_image', 'border')
+        try:
+            self.canvas.tag_raise('border', 'corner_mask')
+        except:
+            pass
+        try:
+            self.canvas.tag_raise('border_image', 'border')
+        except:
+            pass
         # 5. 手柄 (必须在边框之上才能点击)
-        self.canvas.tag_raise('handle')
+        try:
+            self.canvas.tag_raise('handle')
+        except:
+            pass
 
     def display_image(self, pil_image):
         """显示PIL图片"""
@@ -899,8 +917,8 @@ class CanvasWidget(tk.Frame):
                         break
             
             elif 'text_layer' in tags:
-                # 文字层缩放：通过回调通知主窗口调整字号
-                if hasattr(self, 'on_text_interaction') and self.on_text_interaction:
+                # 文字层缩放：直接更新预览文字层的字号并重新渲染
+                if hasattr(self, '_preview_text_layer') and self._preview_text_layer:
                     # 简单的缩放因子计算
                     if 's' in self.handle_type or 'e' in self.handle_type:
                         delta = max(dx, dy)
@@ -909,8 +927,12 @@ class CanvasWidget(tk.Frame):
                     
                     # 避免过快
                     if abs(delta) > 5:
-                        factor = 1.0 + (delta / 200.0)
-                        self.on_text_interaction('scale', factor=factor)
+                        # 直接修改字号
+                        new_size = max(12, min(500, int(self._preview_text_layer.font_size * (1.0 + delta / 200.0))))
+                        if new_size != self._preview_text_layer.font_size:
+                            self._preview_text_layer.font_size = new_size
+                            # 重新渲染
+                            self.set_text_layer(self._preview_text_layer)
                         
                         # 重置 drag start 防止累积过快
                         self.drag_start_x = event.x
@@ -1072,11 +1094,21 @@ class CanvasWidget(tk.Frame):
 
     def set_text_layer(self, text_layer):
         """设置文字层并渲染到画布"""
+        # 检查文字层是否当前被选中，如果是，需要更新选中引用
+        was_selected = False
+        if self.selected_item:
+            tags = self.canvas.gettags(self.selected_item)
+            if 'text_layer' in tags:
+                was_selected = True
+        
         # 清除旧的文字层
         self.clear_text_layer()
         
         if not text_layer or not text_layer.content:
             return
+        
+        # 保存为当前文字层以便缩放
+        self._preview_text_layer = text_layer
         
         # 渲染文字
         from image_processor import TextLayer
@@ -1084,14 +1116,20 @@ class CanvasWidget(tk.Frame):
         
         if rendered:
             # 转换为 PhotoImage
-            self._text_photo = ImageTk.PhotoImage(rendered)
-            self._text_id = self.canvas.create_image(
+            self.text_photo = ImageTk.PhotoImage(rendered)
+            self.text_pil_image = rendered
+            text_id = self.canvas.create_image(
                 x, y, 
-                image=self._text_photo, 
+                image=self.text_photo, 
                 anchor='nw',
                 tags=('text_layer',)
             )
             self._ensure_layer_order()
+            
+            # 如果之前被选中，更新引用并重绘手柄
+            if was_selected:
+                self.selected_item = text_id
+                self._create_scaling_handles(text_id)
     
     def set_text_preview(self, config):
         """设置文字预览 (实时)"""
@@ -1112,7 +1150,11 @@ class CanvasWidget(tk.Frame):
             margin=config.get('margin', 20),
             shadow=config.get('shadow'),
             stroke=config.get('stroke'),
+            highlight=config.get('highlight', {'enabled': False, 'keywords': [], 'color': '#FFB7B2'})
         )
+        
+        # 保存为当前文字层以便缩放
+        self._preview_text_layer = text_layer
         
         self.set_text_layer(text_layer)
     
