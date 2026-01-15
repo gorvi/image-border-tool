@@ -765,6 +765,18 @@ class MainWindow(tk.Tk):
         )
         self.canvas_widget.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
+        # 设置文字交互回调
+        def on_text_interaction(action, **kwargs):
+            if action == 'scale' and 'factor' in kwargs:
+                factor = kwargs['factor']
+                new_size = int(self.font_size_var.get() * factor)
+                # 限制字号范围 12-200
+                new_size = max(12, min(200, new_size))
+                self.font_size_var.set(new_size)
+                self._auto_apply_text()
+        
+        self.canvas_widget.on_text_interaction = on_text_interaction
+        
         return panel
     
     def create_right_panel(self, parent):
@@ -1428,7 +1440,7 @@ class MainWindow(tk.Tk):
         font_combo.pack(side=tk.LEFT, padx=4)
         
         def on_font_change(event):
-            self.update_text_preview()
+            self._auto_apply_text()
             
         font_combo.bind('<<ComboboxSelected>>', on_font_change)
         
@@ -1462,31 +1474,31 @@ class MainWindow(tk.Tk):
         
         # 基础色
         basic_frame = tk.Frame(color_section, bg=COLORS['panel_bg'])
-        basic_frame.pack(anchor='w', pady=2)
+        basic_frame.pack(fill=tk.X, pady=2)
         basic_colors = ['#333333', '#000000', '#FFFFFF', '#FF2D55', '#FF9500', '#34C759', '#007AFF']
-        for c in basic_colors:
+        for i, c in enumerate(basic_colors):
             cb = tk.Canvas(basic_frame, width=18, height=18, bg=c, highlightthickness=1,
                           highlightbackground=COLORS['separator'], cursor='hand2')
-            cb.pack(side=tk.LEFT, padx=1)
+            cb.grid(row=0, column=i, padx=1, pady=1)
             cb.bind('<Button-1>', lambda e, color=c: self.set_text_color(color))
         
         # 马卡龙色
         from constants import MACARON_COLORS, DOPAMINE_COLORS
         macaron_frame = tk.Frame(color_section, bg=COLORS['panel_bg'])
-        macaron_frame.pack(anchor='w', pady=2)
-        for c in MACARON_COLORS[:9]:
+        macaron_frame.pack(fill=tk.X, pady=2)
+        for i, c in enumerate(MACARON_COLORS[:9]):
             cb = tk.Canvas(macaron_frame, width=18, height=18, bg=c, highlightthickness=1,
                           highlightbackground=COLORS['separator'], cursor='hand2')
-            cb.pack(side=tk.LEFT, padx=1)
+            cb.grid(row=0, column=i, padx=1, pady=1)
             cb.bind('<Button-1>', lambda e, color=c: self.set_text_color(color))
         
         # 多巴胺色
         dopamine_frame = tk.Frame(color_section, bg=COLORS['panel_bg'])
-        dopamine_frame.pack(anchor='w', pady=2)
-        for c in DOPAMINE_COLORS[:9]:
+        dopamine_frame.pack(fill=tk.X, pady=2)
+        for i, c in enumerate(DOPAMINE_COLORS[:9]):
             cb = tk.Canvas(dopamine_frame, width=18, height=18, bg=c, highlightthickness=1,
                           highlightbackground=COLORS['separator'], cursor='hand2')
-            cb.pack(side=tk.LEFT, padx=1)
+            cb.grid(row=0, column=i, padx=1, pady=1)
             cb.bind('<Button-1>', lambda e, color=c: self.set_text_color(color))
         
         # 自定义颜色按钮
@@ -1623,6 +1635,9 @@ class MainWindow(tk.Tk):
         """文字内容输入时触发 - 带防抖的自动关键词检测"""
         content = self.text_content_entry.get('1.0', 'end-1c').strip() if hasattr(self, 'text_content_entry') else ''
         
+        # 立即应用文字到画布
+        self._auto_apply_text()
+        
         # 检查内容是否变化
         last_content = getattr(self, '_last_text_content', '')
         if content != last_content:
@@ -1634,10 +1649,6 @@ class MainWindow(tk.Tk):
             
             # 延迟 800ms 后自动检测关键词 (防抖)
             self._keyword_detect_job = self.after(800, self._auto_detect_silent)
-        else:
-            # 内容没变，只更新样式
-            self._auto_apply_text()
-        self._keyword_detect_job = self.after(800, self._auto_detect_silent)
     
     def _auto_detect_silent(self):
         """静默自动检测关键词并自动应用到画布"""
@@ -1739,6 +1750,7 @@ class MainWindow(tk.Tk):
         
         # 存储并应用
         self.current_text_layer = text_layer
+        self.text_layers = [text_layer]
         
         # 预览时不写入 ImageProcessor，而是作为独立 Item 添加到 Canvas
         self.image_processor.clear_text_layers()
@@ -2680,13 +2692,19 @@ class MainWindow(tk.Tk):
             self.save_settings()
     
     def select_text_dir(self):
-        """选择文字目录"""
-        dir_path = filedialog.askdirectory(title='选择文字目录 (包含 .txt 文件)', initialdir=self.batch_text_dir or None)
-        if dir_path:
-            self.batch_text_dir = dir_path
+        """选择文字TXT文件"""
+        file_path = filedialog.askopenfilename(
+            title='选择文字TXT文件 (每行20-50字，每行对应一张图)',
+            filetypes=[('文本文件', '*.txt')],
+            initialdir=os.path.dirname(self.batch_text_dir) if self.batch_text_dir else None
+        )
+        if file_path:
+            self.batch_text_dir = file_path
             if hasattr(self, 'text_dir_label'):
-                self.text_dir_label.config(text=dir_path)
+                self.text_dir_label.config(text=os.path.basename(file_path))
             self.save_settings()
+            # 提示用户TXT文件格式要求
+            messagebox.showinfo('提示', '请确保TXT文档中每行包含20-50字，每行文字将对应一张图片。')
     
     def show_toast(self, message, duration=2000):
         """显示非阻塞的 Toast 提示"""
@@ -2884,6 +2902,16 @@ class MainWindow(tk.Tk):
         self.batch_log(f"输出目录: {output_dir}")
         self.batch_log(f"输出尺寸: {preset_width}x{preset_height}")
         
+        # 预读TXT文件的所有行（如果启用了文字TXT文件）
+        text_lines = []
+        if self.batch_use_text_dir.get() and self.batch_text_dir:
+            try:
+                with open(self.batch_text_dir, 'r', encoding='utf-8') as f:
+                    text_lines = [line.strip() for line in f if line.strip()]
+                self.batch_log(f"文字TXT文件: 共 {len(text_lines)} 行")
+            except Exception as e:
+                self.batch_log(f"读取文字TXT文件失败: {e}")
+        
         # 记录本次会话处理数
         self.current_session_processed = 0
         
@@ -3062,28 +3090,15 @@ class MainWindow(tk.Tk):
                 # 6. 添加文字层
                 text_content = None
                 
-                # 方式1: 从文本目录读取对应的 .txt 文件
-                if self.batch_use_text_dir.get() and self.batch_text_dir:
-                    base_name = os.path.splitext(filename)[0]
-                    txt_path = os.path.join(self.batch_text_dir, base_name + '.txt')
-                    
-                    if os.path.exists(txt_path):
-                        try:
-                            with open(txt_path, 'r', encoding='utf-8') as f:
-                                text_content = f.read().strip()
-                            self.batch_log(f"  文字: 从 {base_name}.txt 读取")
-                        except Exception as e:
-                            self.batch_log(f"  文字: 读取失败 - {e}")
+                # 方式1: 从TXT文件读取对应行
+                if self.batch_use_text_dir.get() and self.batch_text_dir and text_lines:
+                    if idx < len(text_lines):
+                        text_content = text_lines[idx]
+                        self.batch_log(f"  文字: 第 {idx+1} 行 - {text_content[:20]}...")
                     else:
-                        # 尝试 default.txt
-                        default_txt = os.path.join(self.batch_text_dir, 'default.txt')
-                        if os.path.exists(default_txt):
-                            try:
-                                with open(default_txt, 'r', encoding='utf-8') as f:
-                                    text_content = f.read().strip()
-                                self.batch_log(f"  文字: 使用 default.txt")
-                            except:
-                                pass
+                        # 如果行数不够，循环使用最后一行
+                        text_content = text_lines[-1]
+                        self.batch_log(f"  文字: 使用最后一行 (第 {len(text_lines)} 行)")
                 
                 # 方式2: 使用编辑器中的文字配置 (如果没有从文件读取)
                 elif self.text_layers and len(self.text_layers) > 0:
