@@ -188,15 +188,16 @@ class TextLayer:
     """文字层 - 用于渲染带样式的文字"""
     
     # 系统字体路径 (支持多个候选路径)
+    # 系统字体路径 (支持多个候选路径，包含 macOS 和 Windows)
     FONT_PATHS = {
-        'sf_pro': ['/System/Library/Fonts/SFNS.ttf', '/System/Library/Fonts/SFPro.ttf'],
-        'pingfang': ['/System/Library/Fonts/PingFang.ttc', '/System/Library/Fonts/PingFang.ttf'],
-        'hiragino': ['/System/Library/Fonts/Hiragino Sans GB.ttc', '/Library/Fonts/Hiragino Sans GB.ttc'],
-        'heiti': ['/System/Library/Fonts/STHeiti Light.ttc', '/System/Library/Fonts/Supplemental/STHeiti Light.ttc'],
-        'songti': ['/System/Library/Fonts/Songti.ttc', '/System/Library/Fonts/Supplemental/Songti.ttc'],
-        'kaiti': ['/System/Library/Fonts/STKaiti.ttc', '/System/Library/Fonts/Supplemental/STKaiti.ttc', '/Library/Fonts/STKaiti.ttf'],
-        'yuanti': ['/System/Library/Fonts/STYuanti.ttc', '/System/Library/Fonts/Supplemental/STYuanti.ttc', '/Library/Fonts/STYuanti.ttf'],
-        'xingkai': ['/System/Library/Fonts/STXingkai.ttc', '/System/Library/Fonts/Supplemental/STXingkai.ttc', '/Library/Fonts/STXingkai.ttf'],
+        'sf_pro': ['/System/Library/Fonts/SFNS.ttf', '/System/Library/Fonts/SFPro.ttf', 'C:/Windows/Fonts/arial.ttf'],
+        'pingfang': ['/System/Library/Fonts/PingFang.ttc', '/System/Library/Fonts/PingFang.ttf', 'C:/Windows/Fonts/msyh.ttc', 'C:/Windows/Fonts/msyh.ttf'],
+        'hiragino': ['/System/Library/Fonts/Hiragino Sans GB.ttc', '/Library/Fonts/Hiragino Sans GB.ttc', 'C:/Windows/Fonts/msyh.ttc', 'C:/Windows/Fonts/micross.ttf'],
+        'heiti': ['/System/Library/Fonts/STHeiti Light.ttc', '/System/Library/Fonts/Supplemental/STHeiti Light.ttc', 'C:/Windows/Fonts/simhei.ttf'],
+        'songti': ['/System/Library/Fonts/Songti.ttc', '/System/Library/Fonts/Supplemental/Songti.ttc', 'C:/Windows/Fonts/simsun.ttc'],
+        'kaiti': ['/System/Library/Fonts/STKaiti.ttc', '/System/Library/Fonts/Supplemental/STKaiti.ttc', '/Library/Fonts/STKaiti.ttf', 'C:/Windows/Fonts/simkai.ttf'],
+        'yuanti': ['/System/Library/Fonts/STYuanti.ttc', '/System/Library/Fonts/Supplemental/STYuanti.ttc', '/Library/Fonts/STYuanti.ttf', 'C:/Windows/Fonts/simyou.ttf'],
+        'xingkai': ['/System/Library/Fonts/STXingkai.ttc', '/System/Library/Fonts/Supplemental/STXingkai.ttc', '/Library/Fonts/STXingkai.ttf', 'C:/Windows/Fonts/STXINGKA.TTF'],
         'weibei': ['/Library/Fonts/WeibeiSC-Bold.otf', '/System/Library/Fonts/Supplemental/WeibeiSC-Bold.otf']
     }
     
@@ -280,7 +281,10 @@ class TextLayer:
             '/System/Library/Fonts/Hiragino Sans GB.ttc',
             '/System/Library/Fonts/Helvetica.ttc',
             '/Library/Fonts/Arial.ttf',
-            '/System/Library/Fonts/Supplemental/Arial.ttf'
+            '/System/Library/Fonts/Supplemental/Arial.ttf',
+            'C:/Windows/Fonts/msyh.ttc',
+            'C:/Windows/Fonts/simsun.ttc',
+            'C:/Windows/Fonts/arial.ttf'
         ]
         
         for fallback in fallback_fonts:
