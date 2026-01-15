@@ -66,18 +66,110 @@ BORDER_STYLES = [
 
 # 贴纸列表（支持PNG图片）
 STICKER_LIST = [
-    {'id': 'heart', 'emoji': '❤️', 'name': '爱心', 'file': 'heart.png'},
-    {'id': 'star', 'emoji': '⭐', 'name': '星星', 'file': 'star.png'},
-    {'id': 'smile', 'emoji': '😊', 'name': '笑脸', 'file': 'smile.png'},
-    {'id': 'fire', 'emoji': '🔥', 'name': '火焰', 'file': 'fire.png'},
-    {'id': 'sparkles', 'emoji': '✨', 'name': '闪光', 'file': 'sparkles.png'},
-    {'id': 'flower', 'emoji': '🌸', 'name': '花朵', 'file': 'flower.png'},
-    {'id': 'crown', 'emoji': '👑', 'name': '皇冠', 'file': 'crown.png'},
-    {'id': 'ribbon', 'emoji': '🎀', 'name': '蝴蝶结', 'file': 'ribbon.png'},
-    {'id': 'cake', 'emoji': '🎂', 'name': '蛋糕', 'file': 'cake.png'},
-    {'id': 'gift', 'emoji': '🎁', 'name': '礼物', 'file': 'gift.png'},
-    {'id': 'balloon', 'emoji': '🎈', 'name': '气球', 'file': 'balloon.png'},
-    {'id': 'music', 'emoji': '🎵', 'name': '音符', 'file': 'music.png'},
+    # 表情
+    {'id': 'heart', 'emoji': '❤️', 'name': '爱心'},
+    {'id': 'star', 'emoji': '⭐', 'name': '星星'},
+    {'id': 'smile', 'emoji': '😊', 'name': '笑脸'},
+    {'id': 'fire', 'emoji': '🔥', 'name': '火焰'},
+    {'id': 'sparkles', 'emoji': '✨', 'name': '闪光'},
+    {'id': 'flower', 'emoji': '🌸', 'name': '花朵'},
+    {'id': 'crown', 'emoji': '👑', 'name': '皇冠'},
+    {'id': 'ribbon', 'emoji': '🎀', 'name': '蝴蝶结'},
+    {'id': 'cake', 'emoji': '🎂', 'name': '蛋糕'},
+    {'id': 'gift', 'emoji': '🎁', 'name': '礼物'},
+    {'id': 'balloon', 'emoji': '🎈', 'name': '气球'},
+    {'id': 'music', 'emoji': '🎵', 'name': '音符'},
+    # 更多表情
+    {'id': 'laughing', 'emoji': '😂', 'name': '大笑'},
+    {'id': 'cool', 'emoji': '😎', 'name': '墨镜'},
+    {'id': 'wink', 'emoji': '😉', 'name': '眨眼'},
+    {'id': 'kiss', 'emoji': '😘', 'name': '飞吻'},
+    {'id': 'love_eyes', 'emoji': '😍', 'name': '花痴'},
+    {'id': 'thinking', 'emoji': '🤔', 'name': '思考'},
+    {'id': 'clap', 'emoji': '👏', 'name': '鼓掌'},
+    {'id': 'party', 'emoji': '🥳', 'name': '派对'},
+    # 动物
+    {'id': 'dog', 'emoji': '🐶', 'name': '狗狗'},
+    {'id': 'cat', 'emoji': '🐱', 'name': '猫咪'},
+    {'id': 'bunny', 'emoji': '🐰', 'name': '兔子'},
+    {'id': 'bear', 'emoji': '🐻', 'name': '小熊'},
+    {'id': 'panda', 'emoji': '🐼', 'name': '熊猫'},
+    {'id': 'unicorn', 'emoji': '🦄', 'name': '独角兽'},
+    {'id': 'butterfly', 'emoji': '🦋', 'name': '蝴蝶'},
+    {'id': 'bee', 'emoji': '🐝', 'name': '蜜蜂'},
+    # 食物
+    {'id': 'pizza', 'emoji': '🍕', 'name': '披萨'},
+    {'id': 'donut', 'emoji': '🍩', 'name': '甜甜圈'},
+    {'id': 'icecream', 'emoji': '🍦', 'name': '冰淇淋'},
+    {'id': 'coffee', 'emoji': '☕', 'name': '咖啡'},
+    {'id': 'watermelon', 'emoji': '🍉', 'name': '西瓜'},
+    {'id': 'strawberry', 'emoji': '🍓', 'name': '草莓'},
+    {'id': 'cherry', 'emoji': '🍒', 'name': '樱桃'},
+    {'id': 'lollipop', 'emoji': '🍭', 'name': '棒棒糖'},
+    # 天气/自然
+    {'id': 'sun', 'emoji': '☀️', 'name': '太阳'},
+    {'id': 'moon', 'emoji': '🌙', 'name': '月亮'},
+    {'id': 'rainbow', 'emoji': '🌈', 'name': '彩虹'},
+    {'id': 'cloud', 'emoji': '☁️', 'name': '云朵'},
+    {'id': 'snowflake', 'emoji': '❄️', 'name': '雪花'},
+    {'id': 'lightning', 'emoji': '⚡', 'name': '闪电'},
+    {'id': 'droplet', 'emoji': '💧', 'name': '水滴'},
+    {'id': 'leaf', 'emoji': '🍃', 'name': '树叶'},
+    # 手势/符号
+    {'id': 'thumbsup', 'emoji': '👍', 'name': '点赞'},
+    {'id': 'ok', 'emoji': '👌', 'name': 'OK'},
+    {'id': 'victory', 'emoji': '✌️', 'name': '胜利'},
+    {'id': 'rock', 'emoji': '🤘', 'name': '摇滚'},
+    {'id': 'pray', 'emoji': '🙏', 'name': '祈祷'},
+    {'id': 'check', 'emoji': '✅', 'name': '完成'},
+    {'id': 'cross', 'emoji': '❌', 'name': '错误'},
+    {'id': 'hundred', 'emoji': '💯', 'name': '满分'},
+    # 物品
+    {'id': 'diamond', 'emoji': '💎', 'name': '钻石'},
+    {'id': 'rocket', 'emoji': '🚀', 'name': '火箭'},
+    {'id': 'camera', 'emoji': '📷', 'name': '相机'},
+    {'id': 'megaphone', 'emoji': '📣', 'name': '喇叭'},
+    {'id': 'trophy', 'emoji': '🏆', 'name': '奖杯'},
+    {'id': 'medal', 'emoji': '🏅', 'name': '奖牌'},
+    {'id': 'key', 'emoji': '🔑', 'name': '钥匙'},
+    {'id': 'bell', 'emoji': '🔔', 'name': '铃铛'},
+]
+
+# 边框图案定义
+BORDER_PATTERNS = [
+    {'id': 'none', 'name': '无', 'icon': '○'},
+    {'id': 'stripe', 'name': '斜纹', 'icon': '╱'},
+    {'id': 'dots', 'name': '波点', 'icon': '●'},
+    {'id': 'grid', 'name': '网格', 'icon': '▦'},
+    {'id': 'wave', 'name': '波浪', 'icon': '〰'},
+    {'id': 'heart', 'name': '心形', 'icon': '♥'},
+    {'id': 'club', 'name': '梅花', 'icon': '♣'},
+    {'id': 'triangle', 'name': '三角形', 'icon': '▲'},
+    {'id': 'diamond', 'name': '菱形', 'icon': '◆'},
+]
+
+# 线条样式定义
+LINE_STYLES = [
+    {'id': 'solid', 'name': '实线'},
+    {'id': 'dashed', 'name': '虚线'},
+    {'id': 'dotted', 'name': '点线'},
+    {'id': 'double', 'name': '双线'},
+]
+
+# 预设颜色列表（用于随机）
+PRESET_COLORS = [
+    '#000000', '#FFFFFF', '#FF0000', '#00FF00', '#0000FF',
+    '#FFFF00', '#00FFFF', '#FF00FF', '#C0C0C0', '#808080',
+    '#800000', '#808000', '#008000', '#800080', '#008080',
+    '#000080', '#FF4500', '#DA70D6', '#EEE8AA', '#98FB98',
+    '#AFEEEE', '#DB7093', '#FFEFD5', '#FFDAB9', '#CD853F',
+    '#FFC0CB', '#DDA0DD', '#B0E0E6', '#800080', '#FF0000',
+    '#BC8F8F', '#4169E1', '#8B4513', '#FA8072', '#FAA460',
+    '#2E8B57', '#FFF5EE', '#A0522D', '#C0C0C0', '#87CEEB',
+    '#6A5ACD', '#708090', '#FFFAFA', '#00FF7F', '#4682B4',
+    '#D2B48C', '#008080', '#D8BFD8', '#FF6347', '#40E0D0',
+    '#EE82EE', '#F5DEB3', '#FFFFFF', '#F5F5F5', '#FFFF00',
+    '#9ACD32'
 ]
 
 # 边框样式（增加预览图）
@@ -155,14 +247,7 @@ BORDER_LINE_STYLES = [
     {'id': 'double', 'name': '双线', 'icon': '═'},
 ]
 
-# 边框图案样式
-BORDER_PATTERNS = [
-    {'id': 'none', 'name': '无', 'icon': '○'},
-    {'id': 'stripe', 'name': '斜纹', 'icon': '╱'},
-    {'id': 'dots', 'name': '波点', 'icon': '●'},
-    {'id': 'grid', 'name': '网格', 'icon': '▦'},
-    {'id': 'wave', 'name': '波浪', 'icon': '〰'},
-]
+
 
 # 背景图案样式
 BACKGROUND_PATTERNS = [
@@ -172,6 +257,7 @@ BACKGROUND_PATTERNS = [
     {'id': 'grid', 'name': '网格', 'icon': '▦'},
     {'id': 'horizontal', 'name': '横线', 'icon': '═'},
     {'id': 'vertical', 'name': '竖线', 'icon': '║'},
+    {'id': 'punch_hole', 'name': '打孔纸', 'icon': '○='},
 ]
 
 # 默认背景色

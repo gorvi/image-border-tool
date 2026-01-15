@@ -5,8 +5,12 @@ echo "  图片套版工具 - 安全启动"
 echo "================================"
 echo ""
 
+# 优先使用项目虚拟环境
+if [ -f .venv/bin/python ]; then
+    PYTHON_CMD=".venv/bin/python"
+    echo "✓ 使用项目虚拟环境 (.venv):"
 # 检查是否有保存的 Python 路径
-if [ -f .python_path ]; then
+elif [ -f .python_path ]; then
     PYTHON_CMD=$(cat .python_path)
     echo "✓ 使用已配置的 Python:"
 elif [ -f /opt/homebrew/bin/python3 ]; then

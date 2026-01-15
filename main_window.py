@@ -100,6 +100,39 @@ class MainWindow(tk.Tk):
         # 滚动控制
         self._active_scroll_widget = None
         
+        # 批量处理配置
+        self.batch_input_dir = ''  # 输入目录
+        self.batch_output_dir = ''  # 输出目录
+        self.processed_images = set()  # 已处理的图片集合
+        self.batch_regenerate_all = tk.BooleanVar(value=False)  # 强制重新处理 (覆盖)
+        
+        # 批量随机化选项
+        self.batch_random_color = tk.BooleanVar(value=False)
+        self.batch_random_style = tk.BooleanVar(value=False)
+        self.batch_random_pattern = tk.BooleanVar(value=False)
+        self.batch_match_canvas = tk.BooleanVar(value=True) # 参考画布位置
+        
+        # 文字层配置
+        self.text_layers = []  # 文字层列表
+        self.current_text_config = {
+            'content': '',
+            'font_size': 48,
+            'color': '#FFFFFF',
+            'font_family': 'pingfang',
+            'align': 'left',
+            'position': 'top',
+            'margin': 20,
+            'shadow': {'enabled': True, 'color': '#000000', 'offset': (2, 2), 'blur': 4},
+            'stroke': {'enabled': False, 'color': '#000000', 'width': 2},
+        }
+        
+        # 批量文字配置
+        self.batch_text_dir = ''  # 文本目录
+        self.batch_use_text_dir = tk.BooleanVar(value=False)  # 使用文本目录
+        
+        # 加载用户设置
+        self.load_settings()
+        
         # 创建UI
         self.create_widgets()
         
@@ -108,6 +141,45 @@ class MainWindow(tk.Tk):
         self.bind('<Command-Shift-Z>', lambda e: self.redo())
         self.bind('<Command-s>', lambda e: self.export_image())
         self.bind('<Configure>', self.on_window_resize)
+    
+    def load_settings(self):
+        """加载用户设置"""
+        import json
+        settings_path = os.path.join(os.path.dirname(__file__), 'settings.json')
+        try:
+            if os.path.exists(settings_path):
+                with open(settings_path, 'r', encoding='utf-8') as f:
+                    settings = json.load(f)
+                    self.batch_input_dir = settings.get('batch_input_dir', '')
+                    self.batch_output_dir = settings.get('batch_output_dir', '')
+                    self.processed_images = set(settings.get('processed_images', []))
+                    print(f"✓ 已加载设置: 输入={self.batch_input_dir}, 输出={self.batch_output_dir}, 已处理={len(self.processed_images)}张")
+        except Exception as e:
+            print(f"加载设置失败: {e}")
+    
+    def save_settings(self):
+        """保存用户设置"""
+        import json
+        settings_path = os.path.join(os.path.dirname(__file__), 'settings.json')
+        try:
+            settings = {
+                'batch_input_dir': self.batch_input_dir,
+                'batch_output_dir': self.batch_output_dir,
+                'processed_images': list(self.processed_images)
+            }
+            with open(settings_path, 'w', encoding='utf-8') as f:
+                json.dump(settings, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"保存设置失败: {e}")
+    
+    def batch_log(self, message):
+        """输出日志到批量处理日志框"""
+        if hasattr(self, 'batch_log_text'):
+            self.batch_log_text.config(state=tk.NORMAL)
+            self.batch_log_text.insert(tk.END, f"{message}\n")
+            self.batch_log_text.see(tk.END)  # 自动滚动到底部
+            self.batch_log_text.config(state=tk.DISABLED)
+            self.update_idletasks()  # 强制更新UI
     
     def on_window_resize(self, event):
         """窗口大小改变时调整画布"""
@@ -118,8 +190,34 @@ class MainWindow(tk.Tk):
             self.resize_timer = self.after(100, self.adjust_canvas_display)
     
     def adjust_canvas_display(self):
-        """自适应调整画布显示"""
+        """自适应调整画布显示，并限制侧边栏宽度"""
         try:
+            # 1. 强制限制侧边栏宽度 (最大 1/4)
+            if hasattr(self, 'paned_window'):
+                total_width = self.paned_window.winfo_width()
+                if total_width > 100:
+                    max_side = int(total_width * 0.25)
+                    
+                    # 检查左侧 sash (index 0)
+                    try:
+                        sash0_x, sash0_y = self.paned_window.sash_coord(0)
+                        if sash0_x > max_side:
+                            self.paned_window.sash_place(0, max_side, sash0_y)
+                            # print(f"Limit Left: {sash0_x} -> {max_side}")
+                    except Exception:
+                        pass
+                    
+                    # 检查右侧 sash (index 1)
+                    try:
+                        sash1_x, sash1_y = self.paned_window.sash_coord(1)
+                        right_width = total_width - sash1_x
+                        if right_width > max_side:
+                            target_x = total_width - max_side
+                            self.paned_window.sash_place(1, target_x, sash1_y)
+                            # print(f"Limit Right: {right_width} -> {max_side}")
+                    except Exception:
+                        pass
+
             if hasattr(self, 'canvas_widget') and hasattr(self, 'center_panel'):
                 # 获取中间面板实际大小
                 self.center_panel.update_idletasks()
@@ -171,68 +269,177 @@ class MainWindow(tk.Tk):
             print(f"Resize error: {e}")
             pass
         
+    def next_tab(self, event=None):
+        """切换到下一个标签页"""
+        if hasattr(self, 'notebook'):
+            current_index = self.notebook.index(self.notebook.select())
+            total_tabs = self.notebook.index('end')
+            next_index = (current_index + 1) % total_tabs
+            self.notebook.select(next_index)
+            return "break" # 防止默认行为
+
     def create_widgets(self):
         """创建界面组件 - 毛玻璃风格"""
-        # 主容器
-        main_container = tk.Frame(self, bg=COLORS['bg'])
-        main_container.pack(fill=tk.BOTH, expand=True)
+        # 主容器 - 使用 PanedWindow 实现可调整大小
+        self.paned_window = tk.PanedWindow(self, orient=tk.HORIZONTAL, 
+                                          bg=COLORS['bg'], sashwidth=4, sashpad=0,
+                                          showhandle=False, borderwidth=0)
+        # 状态变量 - 记录当前拖拽的sash索引
+        self.dragging_sash_index = None
         
-        # 左侧可折叠面板容器
-        self.left_container = tk.Frame(main_container, bg=COLORS['bg'])
-        self.left_container.pack(side=tk.LEFT, fill=tk.Y)
+        self.paned_window.pack(fill=tk.BOTH, expand=True)
         
-        # 左侧面板框架
-        self.left_panel_frame = tk.Frame(self.left_container, bg=COLORS['bg'])
-        self.left_panel_frame.pack(side=tk.LEFT, fill=tk.Y)
+        # 绑定鼠标事件处理拖拽限制
+        # ButtonPress: 检测点中了哪个 sash
+        self.paned_window.bind('<ButtonPress-1>', self.start_sash_drag, add='+')
+        # B1-Motion: 拦截拖拽，实施限制
+        self.paned_window.bind('<B1-Motion>', self.on_sash_drag)
+        # ButtonRelease: 结束拖拽
+        self.paned_window.bind('<ButtonRelease-1>', self.end_sash_drag, add='+')
         
-        self.left_panel = self.create_left_panel(self.left_panel_frame)
+        # 延迟绑定窗口大小改变事件
+        self.after(1000, self.bind_configure_limit)
+        
+        # 左侧面板容器
+        self.left_container = tk.Frame(self.paned_window, bg=COLORS['bg'])
+        # self.left_container.bind('<Configure>', self.on_panel_resize) # 移除容易导致闪烁的 Configure 绑定
+        
+        self.left_panel = self.create_left_panel(self.left_container)
         self.left_panel.pack(fill=tk.BOTH, expand=True, padx=(8, 0), pady=8)
-        
-        # 折叠按钮 - 使用Label
-        self.collapse_btn = tk.Label(
-            self.left_container,
-            text='◀',
-            font=('SF Pro Text', 10),
-            bg=COLORS['bg_secondary'],
-            fg=COLORS['text_primary'],
-            width=2,
-            cursor='hand2'
-        )
-        self.collapse_btn.pack(side=tk.RIGHT, fill=tk.Y, padx=0)
-        self.collapse_btn.bind('<Button-1>', lambda e: self.toggle_left_panel())
-        self.collapse_btn.bind('<Enter>', lambda e: self.collapse_btn.config(bg=COLORS['hover']))
-        self.collapse_btn.bind('<Leave>', lambda e: self.collapse_btn.config(bg=COLORS['bg_secondary']))
         
         self.left_panel_visible = True
         
+        # 将左侧容器添加到 PanedWindow (设置最小宽度 260)
+        self.paned_window.add(self.left_container, minsize=260, width=280)
+
         # 中间画布区域
-        self.center_panel = self.create_center_panel(main_container)
-        self.center_panel.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=8, pady=8)
+        self.center_panel = self.create_center_panel(self.paned_window)
+        # 设置 stretch='always' 确保中间区域优先占用空间
+        self.paned_window.add(self.center_panel, stretch='always', minsize=360)
+        
+        # 绑定文字交互回调
+        if hasattr(self, 'canvas_widget'):
+            self.canvas_widget.set_text_callback(self.on_text_transform)
         
         # 右侧面板
-        self.right_panel = self.create_right_panel(main_container)
-        self.right_panel.pack(side=tk.RIGHT, fill=tk.Y, padx=(0, 8), pady=8)
+        self.right_panel = self.create_right_panel(self.paned_window)
+        # 初始宽度设小一点，限制最小宽度
+        self.paned_window.add(self.right_panel, minsize=260, width=280)
         
         # 延迟应用默认边框（等待画布初始化完成）
         self.after(200, self.apply_default_border)
+        
+    def bind_configure_limit(self):
+        """延迟绑定窗口调整事件"""
+        if hasattr(self, 'paned_window'):
+             self.paned_window.bind('<Configure>', lambda e: self.on_sash_drag(e, configure=True), add='+')
     
+    def start_sash_drag(self, event):
+        """开始拖拽：判断点中了哪个sash"""
+        if not hasattr(self, 'paned_window'): return
+        
+        try:
+            # 简单的距离判断：Sash 宽度约4px，增加一点容错
+            click_x = event.x
+            
+            # 检查 Sash 0 (左侧)
+            try:
+                sash0_x, _ = self.paned_window.sash_coord(0)
+                if abs(click_x - sash0_x) < 10:
+                    self.dragging_sash_index = 0
+                    return
+            except: pass
+            
+            # 检查 Sash 1 (右侧)
+            try:
+                sash1_x, _ = self.paned_window.sash_coord(1)
+                if abs(click_x - sash1_x) < 10:
+                    self.dragging_sash_index = 1
+                    return
+            except: pass
+            
+        except Exception as e:
+            print(f"Drag start error: {e}")
+            
+    def end_sash_drag(self, event):
+        """结束拖拽"""
+        self.dragging_sash_index = None
+        self.adjust_canvas_display()
+
+    def on_sash_drag(self, event=None, configure=False):
+        """处理拖拽过程中的限制"""
+        if not hasattr(self, 'paned_window'): return
+        if not self.winfo_viewable(): return
+        
+        try:
+            total_width = self.paned_window.winfo_width()
+            if total_width < 200: return
+            
+            MIN_SIDE = 260
+            # 左侧最大 30%，右侧最大 35%
+            max_left = int(total_width * 0.30) 
+            max_right = int(total_width * 0.35)
+            
+            # 如果是窗口调整事件(configure=True)，检查所有 sash 并在越界时修正
+            if configure or self.dragging_sash_index is None:
+                # 检查所有并修正（此时不 return break，仅修正）
+                try:
+                    sash0_x, sash0_y = self.paned_window.sash_coord(0)
+                    limit = max(MIN_SIDE, max_left)
+                    if sash0_x > limit:
+                        self.paned_window.sash_place(0, limit, sash0_y)
+                except: pass
+                
+                try:
+                    sash1_x, sash1_y = self.paned_window.sash_coord(1)
+                    limit_right_panel = max(MIN_SIDE, max_right)
+                    limit_x = total_width - limit_right_panel
+                    if sash1_x < limit_x:
+                         self.paned_window.sash_place(1, limit_x, sash1_y)
+                except: pass
+                return
+
+            # 如果是主动拖拽 (dragging_sash_index valid)
+            # 我们直接控制 sash 位置并拦截事件 (return 'break') 防止冲突
+            
+            if self.dragging_sash_index == 0:
+                # 左侧
+                # 目标位置受限于：最小宽度 ~ 最大宽度
+                # 注意：sash_place 0 设置的是左侧面板宽度
+                target_limit = max(MIN_SIDE, max_left)
+                
+                # 鼠标位置限制
+                new_x = max(MIN_SIDE, min(event.x, target_limit))
+                
+                self.paned_window.sash_place(0, new_x, 0)
+                return "break" # 拦截，防止系统覆盖
+                
+            elif self.dragging_sash_index == 1:
+                # 右侧
+                # sash_place 1 设置的是 (左+中) 的宽度
+                # 右侧面板宽度 = Total - new_x
+                # 限制：RightWidth <= max_right AND RightWidth >= MIN_SIDE
+                # 所以: Total - new_x <= max_right  => new_x >= Total - max_right (Left bound)
+                #       Total - new_x >= MIN_SIDE   => new_x <= Total - MIN_SIDE (Right bound)
+                
+                actual_max_right = max(MIN_SIDE, max_right)
+                
+                left_bound = total_width - actual_max_right
+                right_bound = total_width - MIN_SIDE
+                
+                new_x = max(left_bound, min(event.x, right_bound))
+                
+                self.paned_window.sash_place(1, new_x, 0)
+                return "break" # 拦截，防止系统覆盖
+
+        except Exception as e:
+            # print(f"Drag error: {e}")
+            pass
+
     def apply_default_border(self):
         """应用默认边框"""
         self.canvas_widget.apply_custom_border(self.border_config)
         print("✓ 默认边框已应用")
-    
-    def toggle_left_panel(self):
-        """切换左侧面板显示/隐藏"""
-        if self.left_panel_visible:
-            # 隐藏
-            self.left_panel_frame.pack_forget()
-            self.collapse_btn.config(text='▶')
-            self.left_panel_visible = False
-        else:
-            # 显示
-            self.left_panel_frame.pack(side=tk.LEFT, fill=tk.Y, before=self.collapse_btn)
-            self.collapse_btn.config(text='◀')
-            self.left_panel_visible = True
     
     def bind_mousewheel(self, content_widget, scroll_widget=None):
         """绑定鼠标滚轮事件
@@ -565,80 +772,133 @@ class MainWindow(tk.Tk):
         panel = tk.Frame(
             parent,
             bg=COLORS['panel_bg'],
-            width=280,
+            width=240,
             relief=tk.FLAT,
             bd=0,
             highlightthickness=0
         )
         
-        # 配置 ttk 标签页样式
+        # 配置 ttk 标签页样式 (备用)
         style = ttk.Style()
         style.theme_use('default')
         
-        # 配置标签页样式 - 深色主题
-        style.configure(
-            'TNotebook',
-            background=COLORS['panel_bg'],
-            borderwidth=0,
-            relief='flat',
-            tabmargins=[0, 0, 0, 0]  # 移除标签页边距
-        )
-        style.configure(
-            'TNotebook.Tab',
-            background=COLORS['bg_tertiary'],
-            foreground=COLORS['text_secondary'],
-            padding=[8, 6],  # 减小 padding 避免区域重叠
-            font=('SF Pro Text', 9),  # 稍小字体
-            borderwidth=0,
-            focuscolor='',  # 移除焦点颜色
-        )
-        style.map(
-            'TNotebook.Tab',
-            background=[('selected', COLORS['panel_bg'])],
-            foreground=[('selected', COLORS['accent'])]
-            # 移除 expand 效果，避免点击区域偏移
-        )
+        # --- 自定义两行标签页实现 ---
+        # 标签页定义: (id, emoji, name)
+        self.tab_definitions = [
+            # 第一行 (Row 0)
+            ('background', '🎨', '背景'),
+            ('border', '🖼️', '边框'),
+            ('sticker', '✨', '贴纸'),
+            ('text', '🔤', '文字'),
+            # 第二行 (Row 1)
+            ('basic', '📐', '编辑'),
+            ('batch', '⚡', '批量'),
+            ('layer', '📚', '图层'),
+            ('history', '📝', '记录'),
+        ]
         
-        # 创建标签页
-        notebook = ttk.Notebook(panel, style='TNotebook')
-        notebook.pack(fill=tk.BOTH, expand=True, padx=0, pady=0)
+        # 标签页容器
+        self.tab_header_frame = tk.Frame(panel, bg=COLORS['panel_bg'])
+        self.tab_header_frame.pack(fill=tk.X, padx=0, pady=0)
         
-        # 标签页1: 背景
-        background_tab = tk.Frame(notebook, bg=COLORS['panel_bg'])
-        notebook.add(background_tab, text='🎨 背景')
-        self.create_background_tab(background_tab)
+        # 两行标签按钮
+        self.tab_row_frames = [
+            tk.Frame(self.tab_header_frame, bg=COLORS['panel_bg']),
+            tk.Frame(self.tab_header_frame, bg=COLORS['panel_bg'])
+        ]
         
-        # 标签页2: 边框
-        border_tab = tk.Frame(notebook, bg=COLORS['panel_bg'])
-        notebook.add(border_tab, text='🖼️ 边框')
-        self.create_border_tab(border_tab)
+        self.tab_buttons = {}
+        self.tab_frames = {}
+        self.current_tab_id = 'background'
+        self.current_active_row = 0
         
-        # 标签页3: 贴纸
-        sticker_tab = tk.Frame(notebook, bg=COLORS['panel_bg'])
-        notebook.add(sticker_tab, text='✨ 贴纸')
-        self.create_sticker_tab(sticker_tab)
+        # 创建标签按钮
+        for i, (tab_id, emoji, name) in enumerate(self.tab_definitions):
+            row = i // 4  # 0-3 在第一行, 4-7 在第二行
+            
+            btn = tk.Label(
+                self.tab_row_frames[row],
+                text=f'{emoji} {name}',
+                font=('SF Pro Text', 9),
+                bg=COLORS['bg_tertiary'],
+                fg=COLORS['text_secondary'],
+                padx=6, pady=4,
+                cursor='hand2'
+            )
+            btn.pack(side=tk.LEFT, padx=1, pady=2)
+            btn.bind('<Button-1>', lambda e, tid=tab_id: self.switch_tab(tid))
+            self.tab_buttons[tab_id] = btn
         
-        # 标签页4: 基础编辑
-        basic_tab = tk.Frame(notebook, bg=COLORS['panel_bg'])
-        notebook.add(basic_tab, text='📐 编辑')
-        self.create_basic_tools_tab(basic_tab)
+        # 内容容器
+        self.tab_content_frame = tk.Frame(panel, bg=COLORS['panel_bg'])
+        self.tab_content_frame.pack(fill=tk.BOTH, expand=True)
         
-        # 标签页5: 批量
-        batch_tab = tk.Frame(notebook, bg=COLORS['panel_bg'])
-        notebook.add(batch_tab, text='⚡ 批量')
-        self.create_batch_tab(batch_tab)
+        # 创建各标签页内容Frame
+        for tab_id, _, _ in self.tab_definitions:
+            frame = tk.Frame(self.tab_content_frame, bg=COLORS['panel_bg'])
+            self.tab_frames[tab_id] = frame
         
-        # 标签页6: 图层
-        layer_tab = tk.Frame(notebook, bg=COLORS['panel_bg'])
-        notebook.add(layer_tab, text='📚 图层')
-        self.create_layer_tab(layer_tab)
+        # 初始化各标签页内容
+        self.create_background_tab(self.tab_frames['background'])
+        self.create_border_tab(self.tab_frames['border'])
+        self.create_sticker_tab(self.tab_frames['sticker'])
+        self.create_text_tab(self.tab_frames['text'])
+        self.create_basic_tools_tab(self.tab_frames['basic'])
+        self.create_batch_tab(self.tab_frames['batch'])
+        self.create_layer_tab(self.tab_frames['layer'])
+        self.create_history_tab(self.tab_frames['history'])
         
-        # 标签页7: 记录
-        history_tab = tk.Frame(notebook, bg=COLORS['panel_bg'])
-        notebook.add(history_tab, text='📝 记录')
-        self.create_history_tab(history_tab)
+        # 初始显示
+        self._update_tab_rows()
+        self.switch_tab('background')
+        
+        # 绑定 Tab 键切换标签
+        self.bind('<Tab>', self.next_tab)
         
         return panel
+    
+    def switch_tab(self, tab_id):
+        """切换标签页"""
+        if tab_id == self.current_tab_id:
+            return
+        
+        # 更新当前标签页
+        self.current_tab_id = tab_id
+        
+        # 判断激活的是哪一行
+        tab_index = [t[0] for t in self.tab_definitions].index(tab_id)
+        new_active_row = tab_index // 4
+        
+        # 如果激活行变化，需要交换行顺序
+        if new_active_row != self.current_active_row:
+            self.current_active_row = new_active_row
+            self._update_tab_rows()
+        
+        # 更新按钮样式
+        for tid, btn in self.tab_buttons.items():
+            if tid == tab_id:
+                btn.config(bg=COLORS['panel_bg'], fg=COLORS['accent'])
+            else:
+                btn.config(bg=COLORS['bg_tertiary'], fg=COLORS['text_secondary'])
+        
+        # 隐藏所有内容，显示当前内容
+        for tid, frame in self.tab_frames.items():
+            frame.pack_forget()
+        self.tab_frames[tab_id].pack(fill=tk.BOTH, expand=True)
+    
+    def _update_tab_rows(self):
+        """更新标签行顺序：激活行在下面"""
+        for row_frame in self.tab_row_frames:
+            row_frame.pack_forget()
+        
+        if self.current_active_row == 0:
+            # Row 1 在上，Row 0 在下
+            self.tab_row_frames[1].pack(fill=tk.X)
+            self.tab_row_frames[0].pack(fill=tk.X)
+        else:
+            # Row 0 在上，Row 1 在下
+            self.tab_row_frames[0].pack(fill=tk.X)
+            self.tab_row_frames[1].pack(fill=tk.X)
     
     def create_basic_tools_tab(self, parent):
         """基础工具标签页 - 现代风格"""
@@ -1088,81 +1348,842 @@ class MainWindow(tk.Tk):
             else:
                 print(f"边框文件不存在: {border_path}")
     
+    def create_text_tab(self, parent):
+        """文字编辑标签页"""
+        from image_processor import TextLayer
+        
+        # 滚动区域
+        scroll_canvas = tk.Canvas(parent, bg=COLORS['panel_bg'], highlightthickness=0)
+        scrollbar = tk.Scrollbar(parent, orient='vertical', command=scroll_canvas.yview)
+        text_frame = tk.Frame(scroll_canvas, bg=COLORS['panel_bg'])
+        
+        text_frame.bind('<Configure>', lambda e: scroll_canvas.configure(scrollregion=scroll_canvas.bbox('all')))
+        scroll_canvas.create_window((0, 0), window=text_frame, anchor='nw')
+        scroll_canvas.configure(yscrollcommand=scrollbar.set)
+        
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        scroll_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        
+        # 绑定滚轮
+        self.bind_mousewheel(text_frame, scroll_canvas)
+        
+        # 1. 文字内容输入 (可调整大小)
+        tk.Label(text_frame, text='📝 文字内容', font=('SF Pro Display', 12, 'bold'),
+                 bg=COLORS['panel_bg'], fg=COLORS['text_primary']).pack(fill=tk.X, padx=12, pady=(12, 4))
+        
+        # 文本框容器
+        text_entry_container = tk.Frame(text_frame, bg=COLORS['panel_bg'])
+        text_entry_container.pack(anchor='w', padx=12, pady=(0, 8))
+        
+        self.text_content_entry = tk.Text(text_entry_container, height=4, width=24, font=('SF Pro Text', 10),
+                                          bg=COLORS['bg_secondary'], fg=COLORS['text_primary'],
+                                          insertbackground=COLORS['text_primary'],
+                                          wrap=tk.WORD, highlightthickness=1, 
+                                          highlightbackground=COLORS['separator'])
+        self.text_content_entry.pack(side=tk.TOP, anchor='w')
+        self.text_content_entry.bind('<KeyRelease>', lambda e: self._on_text_input())
+        self._keyword_detect_job = None  # 用于防抖
+        
+        # 调整大小的手柄
+        resize_handle = tk.Label(text_entry_container, text='⋮⋮', font=('SF Pro Text', 8),
+                                 bg=COLORS['bg_tertiary'], fg=COLORS['text_secondary'],
+                                 cursor='bottom_right_corner', padx=2, pady=0)
+        resize_handle.pack(side=tk.RIGHT, anchor='se')
+        
+        # 拖拽调整大小
+        def on_resize_drag(event):
+            # 获取文本框当前位置
+            entry_x = self.text_content_entry.winfo_x()
+            entry_y = self.text_content_entry.winfo_y()
+            # 计算新尺寸(相对于文本框左上角)
+            new_w = max(15, (event.x_root - self.text_content_entry.winfo_rootx()) // 8)  # 字符宽度
+            new_h = max(2, (event.y_root - self.text_content_entry.winfo_rooty()) // 16)   # 行高
+            self.text_content_entry.config(width=new_w, height=new_h)
+        
+        resize_handle.bind('<B1-Motion>', on_resize_drag)
+        
+        # 2. 字体设置
+        font_frame = tk.Frame(text_frame, bg=COLORS['panel_bg'])
+        font_frame.pack(fill=tk.X, padx=12, pady=4)
+        
+        tk.Label(font_frame, text='字体:', font=('SF Pro Text', 10),
+                 bg=COLORS['panel_bg'], fg=COLORS['text_secondary']).pack(side=tk.LEFT)
+        
+        from image_processor import TextLayer
+        from tkinter import ttk
+        
+        font_map = TextLayer.FONT_NAMES
+        font_values = list(font_map.values())
+        default_font_name = font_map.get('pingfang', '苹方 (默认)')
+        
+        self.font_family_var = tk.StringVar(value=default_font_name)
+        
+        #样式调整
+        style = ttk.Style()
+        style.theme_use('default') 
+        style.configure("TCombobox", fieldbackground=COLORS['bg_secondary'], background=COLORS['bg_secondary'], foreground='#333333')
+        
+        font_combo = ttk.Combobox(font_frame, textvariable=self.font_family_var, values=font_values, 
+                                  state="readonly", width=12)
+        font_combo.pack(side=tk.LEFT, padx=4)
+        
+        def on_font_change(event):
+            self.update_text_preview()
+            
+        font_combo.bind('<<ComboboxSelected>>', on_font_change)
+        
+        # 3. 字号设置
+        size_frame = tk.Frame(text_frame, bg=COLORS['panel_bg'])
+        size_frame.pack(fill=tk.X, padx=12, pady=4)
+        
+        tk.Label(size_frame, text='字号:', font=('SF Pro Text', 10),
+                 bg=COLORS['panel_bg'], fg=COLORS['text_secondary']).pack(side=tk.LEFT)
+        
+        self.font_size_var = tk.IntVar(value=48)
+        size_scale = tk.Scale(size_frame, from_=12, to=120, orient=tk.HORIZONTAL,
+                             variable=self.font_size_var, bg=COLORS['panel_bg'], 
+                             fg=COLORS['text_primary'], highlightthickness=0,
+                             troughcolor=COLORS['bg_secondary'], length=100,
+                             command=lambda v: self.update_text_preview())
+        size_scale.pack(side=tk.LEFT, padx=(8, 0))
+        
+        self.font_size_label = tk.Label(size_frame, text='48', font=('SF Pro Text', 10),
+                                        bg=COLORS['panel_bg'], fg=COLORS['text_primary'], width=4)
+        self.font_size_label.pack(side=tk.LEFT)
+        
+        # 4. 颜色设置 - 扩展版
+        color_section = tk.Frame(text_frame, bg=COLORS['panel_bg'])
+        color_section.pack(fill=tk.X, padx=12, pady=4)
+        
+        tk.Label(color_section, text='颜色:', font=('SF Pro Text', 10),
+                 bg=COLORS['panel_bg'], fg=COLORS['text_secondary']).pack(anchor='w')
+        
+        self.text_color_var = tk.StringVar(value='#333333')
+        
+        # 基础色
+        basic_frame = tk.Frame(color_section, bg=COLORS['panel_bg'])
+        basic_frame.pack(anchor='w', pady=2)
+        basic_colors = ['#333333', '#000000', '#FFFFFF', '#FF2D55', '#FF9500', '#34C759', '#007AFF']
+        for c in basic_colors:
+            cb = tk.Canvas(basic_frame, width=18, height=18, bg=c, highlightthickness=1,
+                          highlightbackground=COLORS['separator'], cursor='hand2')
+            cb.pack(side=tk.LEFT, padx=1)
+            cb.bind('<Button-1>', lambda e, color=c: self.set_text_color(color))
+        
+        # 马卡龙色
+        from constants import MACARON_COLORS, DOPAMINE_COLORS
+        macaron_frame = tk.Frame(color_section, bg=COLORS['panel_bg'])
+        macaron_frame.pack(anchor='w', pady=2)
+        for c in MACARON_COLORS[:9]:
+            cb = tk.Canvas(macaron_frame, width=18, height=18, bg=c, highlightthickness=1,
+                          highlightbackground=COLORS['separator'], cursor='hand2')
+            cb.pack(side=tk.LEFT, padx=1)
+            cb.bind('<Button-1>', lambda e, color=c: self.set_text_color(color))
+        
+        # 多巴胺色
+        dopamine_frame = tk.Frame(color_section, bg=COLORS['panel_bg'])
+        dopamine_frame.pack(anchor='w', pady=2)
+        for c in DOPAMINE_COLORS[:9]:
+            cb = tk.Canvas(dopamine_frame, width=18, height=18, bg=c, highlightthickness=1,
+                          highlightbackground=COLORS['separator'], cursor='hand2')
+            cb.pack(side=tk.LEFT, padx=1)
+            cb.bind('<Button-1>', lambda e, color=c: self.set_text_color(color))
+        
+        # 自定义颜色按钮
+        custom_btn_frame = tk.Frame(color_section, bg=COLORS['panel_bg'])
+        custom_btn_frame.pack(anchor='w', pady=4)
+        
+        self.text_color_preview = tk.Canvas(custom_btn_frame, width=24, height=24, 
+                                            bg='#333333', highlightthickness=1,
+                                            highlightbackground=COLORS['separator'])
+        self.text_color_preview.pack(side=tk.LEFT)
+        
+        custom_btn = tk.Label(custom_btn_frame, text='🎨 自定义', font=('SF Pro Text', 9),
+                             bg=COLORS['bg_tertiary'], fg=COLORS['text_primary'], 
+                             padx=6, pady=2, cursor='hand2')
+        custom_btn.pack(side=tk.LEFT, padx=4)
+        custom_btn.bind('<Button-1>', lambda e: self.open_text_color_picker())
+        
+        # 5. 对齐设置
+        align_frame = tk.Frame(text_frame, bg=COLORS['panel_bg'])
+        align_frame.pack(fill=tk.X, padx=12, pady=4)
+        
+        tk.Label(align_frame, text='对齐:', font=('SF Pro Text', 10),
+                 bg=COLORS['panel_bg'], fg=COLORS['text_secondary']).pack(side=tk.LEFT)
+        
+        self.text_align_var = tk.StringVar(value='left')
+        for name, val in [('左', 'left'), ('中', 'center'), ('右', 'right')]:
+            rb = tk.Radiobutton(align_frame, text=name, variable=self.text_align_var, value=val,
+                               bg=COLORS['panel_bg'], fg=COLORS['text_primary'],
+                               selectcolor=COLORS['accent'], activebackground=COLORS['panel_bg'],
+                               command=self.update_text_preview)
+            rb.pack(side=tk.LEFT, padx=4)
+        
+        # 6. 位置设置
+        pos_frame = tk.Frame(text_frame, bg=COLORS['panel_bg'])
+        pos_frame.pack(fill=tk.X, padx=12, pady=4)
+        
+        tk.Label(pos_frame, text='位置:', font=('SF Pro Text', 10),
+                 bg=COLORS['panel_bg'], fg=COLORS['text_secondary']).pack(side=tk.LEFT)
+        
+        self.text_position_var = tk.StringVar(value='top')
+        for name, val in [('顶部', 'top'), ('居中', 'center'), ('底部', 'bottom')]:
+            rb = tk.Radiobutton(pos_frame, text=name, variable=self.text_position_var, value=val,
+                               bg=COLORS['panel_bg'], fg=COLORS['text_primary'],
+                               selectcolor=COLORS['accent'], activebackground=COLORS['panel_bg'],
+                               command=self.update_text_preview)
+            rb.pack(side=tk.LEFT, padx=4)
+        
+        # 7. 边距设置
+        margin_frame = tk.Frame(text_frame, bg=COLORS['panel_bg'])
+        margin_frame.pack(fill=tk.X, padx=12, pady=4)
+        
+        tk.Label(margin_frame, text='边距:', font=('SF Pro Text', 10),
+                 bg=COLORS['panel_bg'], fg=COLORS['text_secondary']).pack(side=tk.LEFT)
+        
+        self.text_margin_var = tk.IntVar(value=20)
+        margin_scale = tk.Scale(margin_frame, from_=0, to=100, orient=tk.HORIZONTAL,
+                               variable=self.text_margin_var, bg=COLORS['panel_bg'],
+                               fg=COLORS['text_primary'], highlightthickness=0,
+                               troughcolor=COLORS['bg_secondary'], length=80,
+                               command=lambda v: self.update_text_preview())
+        margin_scale.pack(side=tk.LEFT, padx=(8, 0))
+        
+        # 8. 阴影设置
+        shadow_frame = tk.LabelFrame(text_frame, text='阴影', font=('SF Pro Text', 10),
+                                     bg=COLORS['panel_bg'], fg=COLORS['text_secondary'],
+                                     padx=8, pady=4)
+        shadow_frame.pack(fill=tk.X, padx=12, pady=8)
+        
+        self.text_shadow_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(shadow_frame, text='启用阴影', variable=self.text_shadow_var,
+                      bg=COLORS['panel_bg'], fg=COLORS['text_primary'],
+                      selectcolor=COLORS['accent'], activebackground=COLORS['panel_bg'],
+                      command=self.update_text_preview).pack(anchor='w')
+        
+        # 9. 描边设置
+        stroke_frame = tk.LabelFrame(text_frame, text='描边', font=('SF Pro Text', 10),
+                                     bg=COLORS['panel_bg'], fg=COLORS['text_secondary'],
+                                     padx=8, pady=4)
+        stroke_frame.pack(fill=tk.X, padx=12, pady=8)
+        
+        self.text_stroke_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(stroke_frame, text='启用描边', variable=self.text_stroke_var,
+                      bg=COLORS['panel_bg'], fg=COLORS['text_primary'],
+                      selectcolor=COLORS['accent'], activebackground=COLORS['panel_bg'],
+                      command=self.update_text_preview).pack(anchor='w')
+        
+        stroke_width_frame = tk.Frame(stroke_frame, bg=COLORS['panel_bg'])
+        stroke_width_frame.pack(fill=tk.X)
+        
+        tk.Label(stroke_width_frame, text='宽度:', font=('SF Pro Text', 9),
+                 bg=COLORS['panel_bg'], fg=COLORS['text_secondary']).pack(side=tk.LEFT)
+        
+        self.stroke_width_var = tk.IntVar(value=2)
+        stroke_scale = tk.Scale(stroke_width_frame, from_=1, to=10, orient=tk.HORIZONTAL,
+                               variable=self.stroke_width_var, bg=COLORS['panel_bg'],
+                               fg=COLORS['text_primary'], highlightthickness=0,
+                               troughcolor=COLORS['bg_secondary'], length=80,
+                               command=lambda v: self.update_text_preview())
+        stroke_scale.pack(side=tk.LEFT, padx=(4, 0))
+        
+        # 11. 关键字高亮设置 (简化版)
+        highlight_frame = tk.Frame(text_frame, bg=COLORS['panel_bg'])
+        highlight_frame.pack(fill=tk.X, padx=12, pady=8)
+        
+        self.highlight_enabled_var = tk.BooleanVar(value=True)
+        tk.Checkbutton(highlight_frame, text='🔍 自动标记关键词', variable=self.highlight_enabled_var,
+                      bg=COLORS['panel_bg'], fg=COLORS['text_primary'],
+                      selectcolor=COLORS['accent'], activebackground=COLORS['panel_bg'],
+                      font=('SF Pro Text', 10),
+                      command=self._on_highlight_toggle).pack(side=tk.LEFT)
+        
+        # 高亮颜色
+        self.highlight_color_var = tk.StringVar(value='#FFB7B2')
+        highlight_colors = ['#FFB7B2', '#FFDAC1', '#E2F0CB', '#B5EAD7', '#C7CEEA', '#FF6EC7', '#FFD60A']
+        for c in highlight_colors:
+            hc = tk.Canvas(highlight_frame, width=16, height=16, bg=c, highlightthickness=1,
+                          highlightbackground=COLORS['separator'], cursor='hand2')
+            hc.pack(side=tk.LEFT, padx=1)
+            hc.bind('<Button-1>', lambda e, color=c: self.set_highlight_color(color))
+        
+        # 存储自动检测的关键词 (内部使用)
+        self._auto_keywords = []
+        
+        # 12. 清除文字按钮
+        btn_frame = tk.Frame(text_frame, bg=COLORS['panel_bg'])
+        btn_frame.pack(fill=tk.X, padx=12, pady=8)
+        
+        clear_btn = tk.Label(btn_frame, text='🗑️ 清除文字', font=('SF Pro Text', 9),
+                            bg=COLORS['bg_tertiary'], fg=COLORS['danger'], pady=4, padx=8, cursor='hand2')
+        clear_btn.pack(anchor='w', pady=2)
+        clear_btn.bind('<Button-1>', lambda e: self.clear_text_layers())
+    
+    def _on_text_input(self):
+        """文字内容输入时触发 - 带防抖的自动关键词检测"""
+        content = self.text_content_entry.get('1.0', 'end-1c').strip() if hasattr(self, 'text_content_entry') else ''
+        
+        # 检查内容是否变化
+        last_content = getattr(self, '_last_text_content', '')
+        if content != last_content:
+            self._last_text_content = content
+            
+            # 取消之前的延迟任务
+            if self._keyword_detect_job:
+                self.after_cancel(self._keyword_detect_job)
+            
+            # 延迟 800ms 后自动检测关键词 (防抖)
+            self._keyword_detect_job = self.after(800, self._auto_detect_silent)
+        else:
+            # 内容没变，只更新样式
+            self._auto_apply_text()
+        self._keyword_detect_job = self.after(800, self._auto_detect_silent)
+    
+    def _auto_detect_silent(self):
+        """静默自动检测关键词并自动应用到画布"""
+        import re
+        if not hasattr(self, 'text_content_entry'):
+            return
+        
+        content = self.text_content_entry.get('1.0', 'end-1c')
+        if not content.strip() or len(content.strip()) < 2:
+            self._auto_keywords = []
+            return
+        
+        keywords = []
+        
+        # 使用 jieba 关键词提取
+        try:
+            import jieba.analyse
+            jieba_keywords = jieba.analyse.extract_tags(content, topK=5, withWeight=False)
+            keywords.extend(jieba_keywords)
+        except:
+            pass
+        
+        # 检测英文单词
+        english_words = re.findall(r'[a-zA-Z]{2,}', content)
+        for word in english_words:
+            if word.lower() not in [k.lower() for k in keywords]:
+                keywords.append(word)
+        
+        # 检测 #标签
+        hashtags = re.findall(r'#\w+', content)
+        for tag in hashtags:
+            cleaned = tag.lstrip('#')
+            if cleaned not in keywords:
+                keywords.append(cleaned)
+        
+        # 存储关键词并自动应用到画布
+        self._auto_keywords = list(dict.fromkeys(keywords))[:8]
+        self._auto_apply_text()
+    
+    def _on_highlight_toggle(self):
+        """高亮开关切换时触发"""
+        self._auto_apply_text()
+    
+    def _auto_apply_text(self):
+        """自动应用文字到画布"""
+        from image_processor import TextLayer
+        
+        content = self.text_content_entry.get('1.0', 'end-1c').strip() if hasattr(self, 'text_content_entry') else ''
+        if not content:
+            self.clear_text_layers()
+            return
+
+        # 获取字体键名 (反向查找)
+        font_name = self.font_family_var.get() if hasattr(self, 'font_family_var') else '苹方 (默认)'
+        font_family = 'pingfang'
+        for k, v in TextLayer.FONT_NAMES.items():
+            if v == font_name:
+                font_family = k
+                break
+        
+        # 检查是否需要保留自定义位置
+        custom_pos = None
+        if hasattr(self, 'current_text_layer') and self.current_text_layer:
+            if getattr(self.current_text_layer, 'position', '') == 'custom':
+                custom_pos = (self.current_text_layer.rel_x, self.current_text_layer.rel_y)
+        
+        # 创建文字层
+        text_layer = TextLayer(
+            content=content,
+            font_size=self.font_size_var.get() if hasattr(self, 'font_size_var') else 48,
+            color=self.text_color_var.get() if hasattr(self, 'text_color_var') else '#333333',
+            font_family=font_family,
+            align=self.text_align_var.get() if hasattr(self, 'text_align_var') else 'left',
+            position='custom' if custom_pos else (self.text_position_var.get() if hasattr(self, 'text_position_var') else 'top'),
+            margin=self.text_margin_var.get() if hasattr(self, 'text_margin_var') else 20,
+            shadow={
+                'enabled': self.text_shadow_var.get() if hasattr(self, 'text_shadow_var') else False,
+                'color': '#000000',
+                'offset': (2, 2),
+                'blur': 4
+            },
+            stroke={
+                'enabled': self.text_stroke_var.get() if hasattr(self, 'text_stroke_var') else False,
+                'color': '#000000',
+                'width': self.stroke_width_var.get() if hasattr(self, 'stroke_width_var') else 2
+            },
+            highlight={
+                'enabled': self.highlight_enabled_var.get() if hasattr(self, 'highlight_enabled_var') else True,
+                'keywords': self._auto_keywords if hasattr(self, '_auto_keywords') else [],
+                'color': self.highlight_color_var.get() if hasattr(self, 'highlight_color_var') else '#FFB7B2'
+            }
+        )
+        
+        # 恢复自定义位置坐标
+        if custom_pos:
+            text_layer.rel_x, text_layer.rel_y = custom_pos
+        
+        # 存储并应用
+        self.current_text_layer = text_layer
+        
+        # 预览时不写入 ImageProcessor，而是作为独立 Item 添加到 Canvas
+        self.image_processor.clear_text_layers()
+        
+        # 渲染文字图片
+        cw = self.canvas_widget.width
+        ch = self.canvas_widget.height
+        text_img, x, y = text_layer.render(cw, ch)
+        
+        if text_img:
+            self.canvas_widget.add_text_layer_item(text_img, x, y)
+    
+    def on_text_transform(self, action, **kwargs):
+        """处理文字层的交互变换"""
+        if not hasattr(self, 'current_text_layer') or not self.current_text_layer:
+            return
+            
+        if action == 'move':
+            # 更新相对坐标
+            x, y = kwargs.get('x'), kwargs.get('y')
+            cw, ch = self.canvas_widget.width, self.canvas_widget.height
+            
+            if cw > 0 and ch > 0:
+                self.current_text_layer.rel_x = x / cw
+                self.current_text_layer.rel_y = y / ch
+                # 标记为自定义位置
+                self.current_text_layer.position = 'custom'
+                
+        elif action == 'scale':
+            # 更新字号
+            factor = kwargs.get('factor', 1.0)
+            if hasattr(self, 'font_size_var'):
+                current_size = self.font_size_var.get()
+                new_size = max(12, min(500, int(current_size * factor)))
+                if new_size != current_size:
+                    self.font_size_var.set(new_size)
+                    # 重新应用文字 (重新渲染)
+                    self._auto_apply_text()
+    
+    def set_text_color(self, color):
+        """设置文字颜色"""
+        self.text_color_var.set(color)
+        # 更新颜色预览
+        if hasattr(self, 'text_color_preview'):
+            self.text_color_preview.config(bg=color)
+        self.update_text_preview()
+    
+    def open_text_color_picker(self):
+        """打开自定义颜色选择器"""
+        from color_wheel_picker import ColorWheelPicker
+        
+        def on_color_selected(color):
+            self.set_text_color(color)
+        
+        picker = ColorWheelPicker(
+            self, 
+            callback=on_color_selected,
+            initial_color=self.text_color_var.get()
+        )
+    
+    def set_highlight_color(self, color):
+        """设置高亮颜色"""
+        self.highlight_color_var.set(color)
+        self.update_text_preview()
+    
+    def auto_detect_keywords(self):
+        """自动检测关键字 (使用 jieba 智能提取)"""
+        import re
+        if not hasattr(self, 'text_content_entry'):
+            return
+        
+        content = self.text_content_entry.get('1.0', 'end-1c')
+        if not content.strip():
+            return
+        
+        keywords = []
+        
+        # 尝试使用 jieba 关键词提取
+        try:
+            import jieba.analyse
+            # 使用 TF-IDF 提取关键词 (最多5个)
+            jieba_keywords = jieba.analyse.extract_tags(content, topK=5, withWeight=False)
+            keywords.extend(jieba_keywords)
+        except ImportError:
+            pass  # jieba 未安装，使用备用方案
+        except Exception as e:
+            print(f"[DEBUG] jieba 关键词提取失败: {e}")
+        
+        # 备用: 检测英文单词 (中文中的英文通常是品牌/专有名词)
+        english_words = re.findall(r'[a-zA-Z]{2,}', content)
+        for word in english_words:
+            if word.lower() not in [k.lower() for k in keywords]:
+                keywords.append(word)
+        
+        # 检测 #标签
+        hashtags = re.findall(r'#\w+', content)
+        for tag in hashtags:
+            cleaned = tag.lstrip('#')
+            if cleaned not in keywords:
+                keywords.append(cleaned)
+        
+        # 去重并更新输入框
+        unique_keywords = list(dict.fromkeys(keywords))[:8]  # 最多8个
+        if hasattr(self, 'highlight_keywords_entry'):
+            self.highlight_keywords_entry.delete(0, 'end')
+            self.highlight_keywords_entry.insert(0, ','.join(unique_keywords))
+            self.highlight_enabled_var.set(True)
+            self.update_text_preview()
+            self.show_toast(f'检测到 {len(unique_keywords)} 个关键词')
+    
+    def update_text_preview(self):
+        """更新文字预览 (实时)"""
+        # 更新字号显示
+        if hasattr(self, 'font_size_label'):
+            self.font_size_label.config(text=str(self.font_size_var.get()))
+        
+        # 更新配置
+        self.current_text_config = {
+            'content': self.text_content_entry.get('1.0', tk.END).strip() if hasattr(self, 'text_content_entry') else '',
+            'font_size': self.font_size_var.get() if hasattr(self, 'font_size_var') else 48,
+            'color': self.text_color_var.get() if hasattr(self, 'text_color_var') else '#FFFFFF',
+            'font_family': self.font_family_var.get() if hasattr(self, 'font_family_var') else 'pingfang',
+            'align': self.text_align_var.get() if hasattr(self, 'text_align_var') else 'center',
+            'position': self.text_position_var.get() if hasattr(self, 'text_position_var') else 'bottom',
+            'margin': self.text_margin_var.get() if hasattr(self, 'text_margin_var') else 20,
+            'shadow': {
+                'enabled': self.text_shadow_var.get() if hasattr(self, 'text_shadow_var') else True,
+                'color': '#000000',
+                'offset': (2, 2),
+                'blur': 4
+            },
+            'stroke': {
+                'enabled': self.text_stroke_var.get() if hasattr(self, 'text_stroke_var') else False,
+                'color': '#000000',
+                'width': self.stroke_width_var.get() if hasattr(self, 'stroke_width_var') else 2
+            },
+        }
+        
+        # 刷新画布预览
+        if hasattr(self, 'canvas_widget'):
+            self.canvas_widget.set_text_preview(self.current_text_config)
+    
+    def apply_text_to_canvas(self):
+        """应用文字到画布"""
+        from image_processor import TextLayer
+        
+        content = self.text_content_entry.get('1.0', tk.END).strip()
+        if not content:
+            self.show_toast('请输入文字内容')
+            return
+        
+        # 创建文字层
+        # 获取高亮关键字列表
+        keywords = []
+        if hasattr(self, 'highlight_keywords_entry'):
+            kw_text = self.highlight_keywords_entry.get().strip()
+            if kw_text:
+                keywords = [k.strip() for k in kw_text.split(',') if k.strip()]
+        
+        text_layer = TextLayer(
+            content=content,
+            font_size=self.font_size_var.get(),
+            color=self.text_color_var.get(),
+            font_family=self.font_family_var.get(),
+            align=self.text_align_var.get(),
+            position=self.text_position_var.get(),
+            margin=self.text_margin_var.get(),
+            shadow={
+                'enabled': self.text_shadow_var.get(),
+                'color': '#000000',
+                'offset': (2, 2),
+                'blur': 4
+            },
+            stroke={
+                'enabled': self.text_stroke_var.get(),
+                'color': '#000000',
+                'width': self.stroke_width_var.get()
+            },
+            highlight={
+                'enabled': self.highlight_enabled_var.get() if hasattr(self, 'highlight_enabled_var') else False,
+                'keywords': keywords,
+                'color': self.highlight_color_var.get() if hasattr(self, 'highlight_color_var') else '#FFB7B2'
+            }
+        )
+        
+        self.text_layers = [text_layer]  # 目前只支持一个文字层
+        self.canvas_widget.set_text_layer(text_layer)
+        self.save_history('添加文字')
+        self.show_toast('文字已应用')
+    
+    def clear_text_layers(self):
+        """清除所有文字层"""
+        self.text_layers = []
+        if hasattr(self, 'canvas_widget'):
+            self.canvas_widget.clear_text_layer()
+        self.show_toast('文字已清除')
+    
     def create_batch_tab(self, parent):
         """批量处理标签页 - 现代风格"""
-        batch_frame = tk.Frame(parent, bg=COLORS['panel_bg'])
-        batch_frame.pack(fill=tk.BOTH, expand=True, padx=16, pady=16)
+        # 滚动区域
+        scroll_canvas = tk.Canvas(parent, bg=COLORS['panel_bg'], highlightthickness=0)
+        scrollbar = tk.Scrollbar(parent, orient='vertical', command=scroll_canvas.yview)
+        batch_frame = tk.Frame(scroll_canvas, bg=COLORS['panel_bg'])
         
-        # 说明文字
-        desc_label = tk.Label(
-            batch_frame,
-            text='批量处理可将当前设置的贴纸和边框\n应用到多张图片上',
-            font=('SF Pro Text', 11),
-            bg=COLORS['panel_bg'],
-            fg=COLORS['text_secondary'],
-            justify=tk.LEFT
+        batch_frame.bind('<Configure>', lambda e: scroll_canvas.configure(scrollregion=scroll_canvas.bbox('all')))
+        scroll_canvas.create_window((0, 0), window=batch_frame, anchor='nw')
+        scroll_canvas.configure(yscrollcommand=scrollbar.set)
+        
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        scroll_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        
+        # 1. 输入目录设置
+        input_header_frame = tk.Frame(batch_frame, bg=COLORS['panel_bg'])
+        input_header_frame.pack(fill=tk.X, padx=12, pady=(12, 4))
+        
+        tk.Label(input_header_frame, text='📁 输入目录', font=('SF Pro Display', 12, 'bold'),
+                 bg=COLORS['panel_bg'], fg=COLORS['text_primary']).pack(side=tk.LEFT)
+                 
+        input_dir_btn = tk.Label(input_header_frame, text='选择', font=('SF Pro Text', 10),
+                                 bg=COLORS['accent'], fg='white', padx=10, pady=4, cursor='hand2')
+        input_dir_btn.pack(side=tk.LEFT, padx=(10, 0))
+        input_dir_btn.bind('<Button-1>', lambda e: self.select_input_dir())
+        
+        # 打开目录按钮
+        input_open_btn = tk.Label(input_header_frame, text='打开', font=('SF Pro Text', 10),
+                                  bg=COLORS['bg_tertiary'], fg=COLORS['text_primary'], padx=10, pady=4, cursor='hand2')
+        input_open_btn.pack(side=tk.LEFT, padx=(4, 0))
+        input_open_btn.bind('<Button-1>', lambda e: self.open_directory(self.batch_input_dir))
+        
+        self.input_dir_label = tk.Label(batch_frame, text=self.batch_input_dir or '未设置',
+                                        font=('SF Pro Text', 9), bg=COLORS['bg_secondary'],
+                                        fg=COLORS['text_secondary'], anchor='w', padx=8, pady=6)
+        self.input_dir_label.pack(fill=tk.X, padx=12)
+        
+        # 2. 输出目录设置
+        output_header_frame = tk.Frame(batch_frame, bg=COLORS['panel_bg'])
+        output_header_frame.pack(fill=tk.X, padx=12, pady=(16, 4))
+        
+        tk.Label(output_header_frame, text='📤 输出目录', font=('SF Pro Display', 12, 'bold'),
+                 bg=COLORS['panel_bg'], fg=COLORS['text_primary']).pack(side=tk.LEFT)
+                 
+        output_dir_btn = tk.Label(output_header_frame, text='选择', font=('SF Pro Text', 10),
+                                  bg=COLORS['accent'], fg='white', padx=10, pady=4, cursor='hand2')
+        output_dir_btn.pack(side=tk.LEFT, padx=(10, 0))
+        output_dir_btn.bind('<Button-1>', lambda e: self.select_output_dir())
+        
+        # 打开目录按钮
+        output_open_btn = tk.Label(output_header_frame, text='打开', font=('SF Pro Text', 10),
+                                   bg=COLORS['bg_tertiary'], fg=COLORS['text_primary'], padx=10, pady=4, cursor='hand2')
+        output_open_btn.pack(side=tk.LEFT, padx=(4, 0))
+        output_open_btn.bind('<Button-1>', lambda e: self.open_directory(self.batch_output_dir))
+        
+        self.output_dir_label = tk.Label(batch_frame, text=self.batch_output_dir or '未设置',
+                                         font=('SF Pro Text', 9), bg=COLORS['bg_secondary'],
+                                         fg=COLORS['text_secondary'], anchor='w', padx=8, pady=6)
+        self.output_dir_label.pack(fill=tk.X, padx=12)
+        
+        # 3. 操作区域标题 (放在分隔线中间)
+        op_title_frame = tk.Frame(batch_frame, bg=COLORS['panel_bg'])
+        op_title_frame.pack(fill=tk.X, padx=12, pady=(10, 8))
+        
+        # 使用 grid 布局实现中间文字两边线条
+        op_title_frame.columnconfigure(0, weight=1)
+        # column 1 contains label
+        op_title_frame.columnconfigure(2, weight=1)
+        
+        tk.Frame(op_title_frame, height=1, bg=COLORS['separator']).grid(row=0, column=0, sticky='ew')
+        tk.Label(op_title_frame, text='⚡ 批量操作', font=('SF Pro Display', 12, 'bold'),
+                 bg=COLORS['panel_bg'], fg=COLORS['text_primary']).grid(row=0, column=1, padx=8)
+        tk.Frame(op_title_frame, height=1, bg=COLORS['separator']).grid(row=0, column=2, sticky='ew')
+        
+        # 从目录加载按钮
+        load_from_dir_btn = tk.Label(
+            batch_frame, text='📂 从输入目录加载图片',
+            bg=COLORS['warning'], fg='white',
+            font=('SF Pro Text', 11, 'bold'), pady=10, cursor='hand2'
         )
-        desc_label.pack(pady=(0, 24))
+        load_from_dir_btn.pack(anchor='w', padx=12, pady=4, ipadx=10)
+        load_from_dir_btn.bind('<Button-1>', lambda e: self.load_from_input_dir())
         
-        batch_upload_btn = tk.Label(
-            batch_frame,
-            text='📁 批量上传图片',
-            bg=COLORS['warning'],
-            fg='white',
-            font=('SF Pro Text', 12, 'bold'),
-            pady=14,
-            cursor='hand2'
-        )
-        batch_upload_btn.pack(fill=tk.X, pady=6)
-        batch_upload_btn.bind('<Button-1>', lambda e: self.batch_upload())
-        batch_upload_btn.bind('<Enter>', lambda e: batch_upload_btn.config(bg='#E68A00'))
-        batch_upload_btn.bind('<Leave>', lambda e: batch_upload_btn.config(bg=COLORS['warning']))
+        # 4. 状态和选项区域
+        status_frame = tk.Frame(batch_frame, bg=COLORS['panel_bg'])
+        status_frame.pack(fill=tk.X, padx=12, pady=12)
         
+        # 状态显示
         self.batch_count_label = tk.Label(
-            batch_frame,
-            text='已选择: 0 张图片',
-            bg=COLORS['panel_bg'],
-            fg=COLORS['text_primary'],
-            font=('SF Pro Display', 12, 'bold')
+            status_frame, text='已加载: 0 张',
+            bg=COLORS['panel_bg'], fg=COLORS['text_primary'],
+            font=('SF Pro Display', 11, 'bold'), anchor='w'
         )
-        self.batch_count_label.pack(pady=12)
+        self.batch_count_label.pack(fill=tk.X)
         
-        batch_export_btn = tk.Label(
-            batch_frame,
-            text='⚡ 批量生成并导出',
-            bg=COLORS['success'],
-            fg='white',
-            font=('SF Pro Text', 12, 'bold'),
-            pady=14,
-            cursor='hand2'
+        self.batch_status_label = tk.Label(
+            status_frame, text='待处理: 0 张 | 本次已处理: 0 张',
+            bg=COLORS['panel_bg'], fg=COLORS['text_secondary'],
+            font=('SF Pro Text', 10), anchor='w'
         )
-        batch_export_btn.pack(fill=tk.X, pady=6)
-        batch_export_btn.bind('<Button-1>', lambda e: self.batch_export())
-        batch_export_btn.bind('<Enter>', lambda e: batch_export_btn.config(bg='#28A745'))
-        batch_export_btn.bind('<Leave>', lambda e: batch_export_btn.config(bg=COLORS['success']))
+        self.batch_status_label.pack(fill=tk.X, pady=(2, 8))
         
-        # 批量处理提示
-        tip_text = """
-使用步骤：
-1. 先上传一张样例图片
-2. 添加贴纸和边框
-3. 点击"批量上传图片"
-4. 点击"批量生成"即可
+        # 全部重新生成勾选框
+        regen_check = tk.Checkbutton(
+            status_frame, text='强制重新处理 (覆盖文件)',
+            variable=self.batch_regenerate_all,
+            bg=COLORS['panel_bg'], fg=COLORS['accent'],
+            font=('SF Pro Text', 10, 'bold'), selectcolor=COLORS['bg_secondary'],
+            activebackground=COLORS['panel_bg'],
+            command=self.update_batch_status_text
+        )
+        regen_check.pack(anchor='w', pady=(0, 10))
 
-注意：批量处理会将当前画布
-上的贴纸和边框应用到所有图片
-        """
-        tip_label = tk.Label(
-            batch_frame,
-            text=tip_text,
-            font=('Arial', 9),
-            bg=COLORS['bg'],
-            fg='#666',
-            justify=tk.LEFT,
-            padx=10,
-            pady=10
+        # 参考示例位置选项
+        tk.Checkbutton(
+            status_frame, text='参考示例位置和缩放', variable=self.batch_match_canvas,
+            bg=COLORS['panel_bg'], fg=COLORS['text_primary'],
+            font=('SF Pro Text', 10), selectcolor=COLORS['bg_secondary'],
+            activebackground=COLORS['panel_bg']
+        ).pack(anchor='w', pady=(0, 15))
+
+        # --- 文字目录设置 ---
+        text_dir_frame = tk.LabelFrame(batch_frame, text='🔤 批量文字', 
+                                       font=('SF Pro Text', 10, 'bold'),
+                                       bg=COLORS['panel_bg'], fg=COLORS['text_secondary'],
+                                       padx=10, pady=8, bd=1, relief='flat')
+        text_dir_frame.pack(fill=tk.X, padx=12, pady=(0, 12))
+        
+        # 启用文字目录勾选框
+        tk.Checkbutton(text_dir_frame, text='从 .txt 文件读取文字', variable=self.batch_use_text_dir,
+                      bg=COLORS['panel_bg'], fg=COLORS['text_primary'], font=('SF Pro Text', 10),
+                      selectcolor=COLORS['accent'], activebackground=COLORS['panel_bg']
+                      ).pack(anchor='w')
+        
+        # 文字目录选择
+        text_dir_select_frame = tk.Frame(text_dir_frame, bg=COLORS['panel_bg'])
+        text_dir_select_frame.pack(fill=tk.X, pady=(4, 0))
+        
+        text_dir_btn = tk.Label(text_dir_select_frame, text='选择文字目录', font=('SF Pro Text', 10),
+                               bg=COLORS['bg_tertiary'], fg=COLORS['text_primary'], padx=8, pady=4, cursor='hand2')
+        text_dir_btn.pack(side=tk.LEFT)
+        text_dir_btn.bind('<Button-1>', lambda e: self.select_text_dir())
+        
+        text_open_btn = tk.Label(text_dir_select_frame, text='打开', font=('SF Pro Text', 10),
+                                bg=COLORS['bg_tertiary'], fg=COLORS['text_primary'], padx=8, pady=4, cursor='hand2')
+        text_open_btn.pack(side=tk.LEFT, padx=(4, 0))
+        text_open_btn.bind('<Button-1>', lambda e: self.open_directory(self.batch_text_dir))
+        
+        self.text_dir_label = tk.Label(text_dir_frame, text=self.batch_text_dir or '未设置',
+                                       font=('SF Pro Text', 9), bg=COLORS['bg_secondary'],
+                                       fg=COLORS['text_secondary'], anchor='w', padx=8, pady=4)
+        self.text_dir_label.pack(fill=tk.X, pady=(4, 0))
+        
+        tk.Label(text_dir_frame, text='提示: 文件名需与图片对应，如 image1.txt',
+                font=('SF Pro Text', 8), bg=COLORS['panel_bg'], fg=COLORS['text_tertiary']
+                ).pack(anchor='w', pady=(4, 0))
+
+        # --- 随机化选项区域 ---
+        # 必须先定义 random_frame
+        random_frame = tk.LabelFrame(batch_frame, text='🎲 随机化选项', 
+                                   font=('SF Pro Text', 10, 'bold'),
+                                   bg=COLORS['panel_bg'], fg=COLORS['text_secondary'],
+                                   padx=10, pady=8, bd=1, relief='flat')
+        random_frame.pack(fill=tk.X, padx=12, pady=(0, 12))
+        
+        # 使用 Grid 布局放置选项
+        tk.Checkbutton(random_frame, text='随机边框颜色', variable=self.batch_random_color,
+                      bg=COLORS['panel_bg'], fg=COLORS['text_primary'], font=('SF Pro Text', 10),
+                      selectcolor=COLORS['bg_secondary'], activebackground=COLORS['panel_bg']
+                      ).grid(row=0, column=0, sticky='w', padx=(0, 15))
+        
+        tk.Checkbutton(random_frame, text='随机线条样式', variable=self.batch_random_style,
+                      bg=COLORS['panel_bg'], fg=COLORS['text_primary'], font=('SF Pro Text', 10),
+                      selectcolor=COLORS['bg_secondary'], activebackground=COLORS['panel_bg']
+                      ).grid(row=0, column=1, sticky='w', padx=0)
+                      
+        tk.Checkbutton(random_frame, text='随机边框图案', variable=self.batch_random_pattern,
+                      bg=COLORS['panel_bg'], fg=COLORS['text_primary'], font=('SF Pro Text', 10),
+                      selectcolor=COLORS['bg_secondary'], activebackground=COLORS['panel_bg']
+                      ).grid(row=1, column=0, columnspan=2, sticky='w', pady=(5, 0))
+        
+        # 5. 批量导出按钮
+        batch_export_btn = tk.Label(
+            batch_frame, text='⚡ 批量生成并导出',
+            bg=COLORS['success'], fg='white',
+            font=('SF Pro Text', 11, 'bold'), pady=12, cursor='hand2'
         )
-        tip_label.pack(fill=tk.X, pady=20)
+        batch_export_btn.pack(anchor='w', padx=12, pady=4, ipadx=10)
+        batch_export_btn.bind('<Button-1>', lambda e: self.batch_export())
+        
+        # 6. 日志输出框
+        # 6. 日志输出框
+        log_header_frame = tk.Frame(batch_frame, bg=COLORS['panel_bg'])
+        log_header_frame.pack(fill=tk.X, padx=12, pady=(20, 4))
+        
+        tk.Label(log_header_frame, text='📋 处理日志', font=('SF Pro Display', 11, 'bold'),
+                 bg=COLORS['panel_bg'], fg=COLORS['text_primary'], anchor='w').pack(side=tk.LEFT)
+        
+        # 复制日志按钮 (放在标题后面)
+        copy_btn = tk.Label(log_header_frame, text='[复制日志]', font=('SF Pro Text', 10),
+                           bg=COLORS['panel_bg'], fg=COLORS['accent'], cursor='hand2')
+        copy_btn.pack(side=tk.LEFT, padx=(10, 0))
+        copy_btn.bind('<Button-1>', lambda e: self.copy_batch_log())
+        
+        log_frame = tk.Frame(batch_frame, bg=COLORS['bg_secondary'])
+        log_frame.pack(fill=tk.BOTH, expand=True, padx=12, pady=(0, 12))
+        
+        self.batch_log_text = tk.Text(log_frame, height=20, font=('Menlo', 9),
+                                       bg=COLORS['bg'], fg=COLORS['text_secondary'],
+                                       wrap=tk.WORD, state=tk.DISABLED,
+                                       highlightthickness=1, highlightbackground=COLORS['separator'])
+        log_scrollbar = tk.Scrollbar(log_frame, command=self.batch_log_text.yview)
+        self.batch_log_text.configure(yscrollcommand=log_scrollbar.set)
+        
+        log_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.batch_log_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        # 7. 底部说明
+        tip_text = "支持格式：JPG, JPEG, PNG, BMP, GIF"
+        tk.Label(batch_frame, text=tip_text, font=('SF Pro Text', 9),
+                 bg=COLORS['panel_bg'], fg=COLORS['text_secondary'], anchor='w',
+                 padx=12, pady=12).pack(fill=tk.X)
+
+    def copy_batch_log(self):
+        """复制批量处理日志到剪贴板"""
+        if hasattr(self, 'batch_log_text'):
+            content = self.batch_log_text.get('1.0', tk.END).strip()
+            if content:
+                self.title_bar.clipboard_clear()
+                self.title_bar.clipboard_append(content)
+                self.title_bar.update() # 必须 update 才能写入剪贴板
+                self.show_toast("日志已复制到剪贴板")
+            else:
+                self.show_toast("日志内容为空")
+
+    def update_batch_status_text(self):
+        """更新批量处理状态文本"""
+        if not hasattr(self, 'batch_images') or not self.batch_images:
+            return
+            
+        if self.batch_regenerate_all.get():
+            pending = len(self.batch_images)
+        else:
+            pending = len([p for p in self.batch_images if os.path.basename(p) not in self.processed_images])
+            
+        # 本次已处理保持不变，或者如果不希望跟“重新生成”状态挂钩也可以
+        processed_text = getattr(self, 'current_session_processed', 0)
+        
+        if hasattr(self, 'batch_status_label'):
+            self.batch_status_label.config(text=f'待处理: {pending} 张 | 本次已处理: {processed_text} 张')
     
     def select_size_preset(self, preset):
         """选择尺寸预设"""
@@ -1465,6 +2486,9 @@ class MainWindow(tk.Tk):
             self.canvas_widget.display_image(current_image)
             # 使用 border_config 而非 current_border，确保边框配置一致
             self.canvas_widget.apply_custom_border(self.border_config)
+        else:
+            # 没有图片时清除画布上的主图片
+            self.canvas_widget.clear_main_image()
             
         # 确保顺序生效后再强制定序一次 (处理异步渲染)
         self.after(50, lambda: self.canvas_widget._ensure_layer_order())
@@ -1499,7 +2523,14 @@ class MainWindow(tk.Tk):
             preset_height = self.current_size_preset['height']
             display_width = self.canvas_widget.width
             display_height = self.canvas_widget.height
-            scale = max(preset_width / display_width, preset_height / display_height)
+            
+            # 使用独立的缩放比例（避免比例失真）
+            scale_x = preset_width / display_width
+            scale_y = preset_height / display_height
+            
+            print(f"[DEBUG] Export: preset={preset_width}x{preset_height}, display={display_width}x{display_height}")
+            print(f"[DEBUG] Export: scale_x={scale_x:.2f}, scale_y={scale_y:.2f}")
+            print(f"[DEBUG] Border config: {self.border_config}")
             
             # 1. 创建背景图层
             final_img = Image.new('RGB', (preset_width, preset_height), self.background_color)
@@ -1508,7 +2539,7 @@ class MainWindow(tk.Tk):
             # 2. 绘制背景图案
             if self.background_pattern and self.background_pattern != 'none':
                 # 这里简单重构图案绘制逻辑，或调用专门的 helper
-                scaled_pattern_size = int(self.background_pattern_size * scale)
+                scaled_pattern_size = int(self.background_pattern_size * max(scale_x, scale_y))
                 # 使用临时处理器来绘制图案以免影响主状态
                 temp_proc = ImageProcessor()
                 temp_proc.current_image = final_img
@@ -1531,30 +2562,59 @@ class MainWindow(tk.Tk):
                         # 注意：Tkinter 里的图片坐标是中心点
                         main_pil = self.image_processor.current_image
                         
-                        # 按比例缩放并粘贴
-                        scaled_main_w = int(main_pil.width * scale)
-                        scaled_main_h = int(main_pil.height * scale)
+                        # 按比例缩放并粘贴 (使用独立的scale_x/scale_y保持比例)
+                        scaled_main_w = int(main_pil.width * scale_x)
+                        scaled_main_h = int(main_pil.height * scale_y)
                         scaled_main_pil = main_pil.resize((scaled_main_w, scaled_main_h), Image.Resampling.LANCZOS)
                         
                         # 计算粘贴位置
-                        paste_x = int(cx * scale - scaled_main_w / 2)
-                        paste_y = int(cy * scale - scaled_main_h / 2)
+                        paste_x = int(cx * scale_x - scaled_main_w / 2)
+                        paste_y = int(cy * scale_y - scaled_main_h / 2)
                         final_img.paste(scaled_main_pil, (paste_x, paste_y), scaled_main_pil if scaled_main_pil.mode == 'RGBA' else None)
             
             # 4. 绘制贴纸
-            sticker_draw = ImageDraw.Draw(final_img)
             for sticker in self.canvas_widget.get_stickers():
-                scaled_x = int(sticker['x'] * scale)
-                scaled_y = int(sticker['y'] * scale)
-                scaled_size = int(sticker['size'] * scale)
+                scaled_x = int(sticker['x'] * scale_x)
+                scaled_y = int(sticker['y'] * scale_y)
+                scaled_size = int(sticker['size'] * max(scale_x, scale_y))
+                
+                print(f"[DEBUG] Sticker: orig=({sticker['x']}, {sticker['y']}), scaled=({scaled_x}, {scaled_y}), size={scaled_size}")
                 
                 try:
-                    # 尝试加载中文字体，如果失败回退
-                    font = ImageFont.truetype("/System/Library/Fonts/STHeiti Light.ttc", scaled_size)
-                except:
-                    font = ImageFont.load_default()
-                
-                sticker_draw.text((scaled_x, scaled_y), sticker['text'], fill='black', font=font, anchor="mm")
+                    # Apple Color Emoji 只支持固定大小，使用 160 像素渲染后缩放
+                    base_size = 160
+                    font = ImageFont.truetype("/System/Library/Fonts/Apple Color Emoji.ttc", base_size)
+                    
+                    # 创建临时图层渲染 emoji
+                    temp_size = base_size * 2  # 留足够边距
+                    emoji_temp = Image.new('RGBA', (temp_size, temp_size), (0, 0, 0, 0))
+                    emoji_draw = ImageDraw.Draw(emoji_temp)
+                    emoji_draw.text((temp_size // 2, temp_size // 2), sticker['text'], font=font, anchor="mm", embedded_color=True)
+                    
+                    # 裁剪掉透明边距
+                    bbox = emoji_temp.getbbox()
+                    if bbox:
+                        emoji_cropped = emoji_temp.crop(bbox)
+                        # 缩放到目标尺寸
+                        emoji_resized = emoji_cropped.resize((scaled_size, scaled_size), Image.Resampling.LANCZOS)
+                        
+                        # 计算粘贴位置（中心对齐）
+                        paste_x = scaled_x - scaled_size // 2
+                        paste_y = scaled_y - scaled_size // 2
+                        
+                        # 合成到最终图片
+                        if final_img.mode != 'RGBA':
+                            final_img = final_img.convert('RGBA')
+                        final_img.paste(emoji_resized, (paste_x, paste_y), emoji_resized)
+                except Exception as e:
+                    print(f"[DEBUG] Emoji rendering error: {e}")
+                    # 降级方案：使用文本
+                    sticker_draw = ImageDraw.Draw(final_img)
+                    try:
+                        font = ImageFont.truetype("/System/Library/Fonts/STHeiti Light.ttc", scaled_size)
+                    except:
+                        font = ImageFont.load_default()
+                    sticker_draw.text((scaled_x, scaled_y), sticker['text'], fill='black', font=font, anchor="mm")
             
             # 5. 绘制边框 (在最上层)
             from image_processor import CompositeImage
@@ -1564,11 +2624,15 @@ class MainWindow(tk.Tk):
             print(f"[DEBUG] Exporting with border config: {border_config}")  # 调试
             
             # 只检查 width > 0 即可应用边框（移除对 id 的检查）
+            uniform_scale = max(scale_x, scale_y)
             if border_config.get('width', 0) > 0:
                 # 缩放边框宽度和圆角
-                border_config['width'] = int(border_config.get('width', 10) * scale)
+                border_config['width'] = int(border_config.get('width', 10) * uniform_scale)
                 if 'radius' in border_config:
-                    border_config['radius'] = int(border_config['radius'] * scale)
+                    border_config['radius'] = int(border_config['radius'] * uniform_scale)
+                # 缩放图案大小
+                if 'pattern_size' in border_config:
+                    border_config['pattern_size'] = int(border_config['pattern_size'] * uniform_scale)
                 
                 composite = CompositeImage(preset_width, preset_height)
                 composite.canvas = final_img.copy()
@@ -1586,13 +2650,118 @@ class MainWindow(tk.Tk):
             # 6. 保存
             try:
                 final_img.save(file_path)
-                messagebox.showinfo('成功', f'图片已保存到:\n{file_path}')
                 
                 # 根据勾选框状态决定是否自动保存预设
+                save_msg = f'图片已保存到:\n{file_path}'
                 if hasattr(self, 'auto_save_preset_var') and self.auto_save_preset_var.get():
-                    self.save_preset_theme()
+                    self.save_preset_theme(silent=True)
+                    save_msg += '\n\n✓ 主题预设已自动保存'
+                
+                messagebox.showinfo('成功', save_msg)
             except Exception as e:
                 messagebox.showerror('错误', f'保存失败: {e}')
+    
+    def select_input_dir(self):
+        """选择输入目录"""
+        dir_path = filedialog.askdirectory(title='选择输入目录', initialdir=self.batch_input_dir or None)
+        if dir_path:
+            self.batch_input_dir = dir_path
+            self.input_dir_label.config(text=dir_path)
+            self.save_settings()
+    
+    def select_output_dir(self):
+        """选择输出目录"""
+        dir_path = filedialog.askdirectory(title='选择输出目录', initialdir=self.batch_output_dir or None)
+        if dir_path:
+            self.batch_output_dir = dir_path
+            self.output_dir_label.config(text=dir_path)
+            self.save_settings()
+    
+    def select_text_dir(self):
+        """选择文字目录"""
+        dir_path = filedialog.askdirectory(title='选择文字目录 (包含 .txt 文件)', initialdir=self.batch_text_dir or None)
+        if dir_path:
+            self.batch_text_dir = dir_path
+            if hasattr(self, 'text_dir_label'):
+                self.text_dir_label.config(text=dir_path)
+            self.save_settings()
+    
+    def show_toast(self, message, duration=2000):
+        """显示非阻塞的 Toast 提示"""
+        toast = tk.Toplevel(self)
+        toast.overrideredirect(True)  # 无边框
+        
+        # 计算位置（居中显示）
+        window_width = self.winfo_width()
+        window_height = self.winfo_height()
+        window_x = self.winfo_rootx()
+        window_y = self.winfo_rooty()
+        
+        # 创建内容
+        frame = tk.Frame(toast, bg='#333333', padx=20, pady=10)
+        frame.pack(fill=tk.BOTH, expand=True)
+        
+        tk.Label(frame, text=message, fg='white', bg='#333333', 
+                 font=('SF Pro Text', 11)).pack()
+        
+        # 调整大小和位置
+        toast.update_idletasks()
+        toast_width = toast.winfo_width()
+        toast_height = toast.winfo_height()
+        
+        x = window_x + (window_width - toast_width) // 2
+        y = window_y + (window_height - toast_height) // 2 + 100 #稍微偏下
+        
+        toast.geometry(f"{toast_width}x{toast_height}+{x}+{y}")
+        
+        # 确保在最上层
+        toast.attributes('-topmost', True)
+        toast.lift()
+        
+        # 设置圆角效果（macOS特有，Windows可能不生效但也不报错）
+        try:
+            toast.attributes('-transparent', True) # 尝试透明
+        except:
+            pass
+            
+        # 自动关闭
+        toast.after(duration, toast.destroy)
+
+    def load_from_input_dir(self):
+        """从输入目录加载图片"""
+        if not self.batch_input_dir:
+            self.show_toast('请先设置输入目录')
+            return
+        
+        if not os.path.isdir(self.batch_input_dir):
+            messagebox.showerror('错误', '输入目录不存在')
+            return
+        
+        # 获取目录中所有图片
+        extensions = ('.jpg', '.jpeg', '.png', '.bmp', '.gif')
+        all_images = []
+        for f in os.listdir(self.batch_input_dir):
+            if f.lower().endswith(extensions):
+                all_images.append(os.path.join(self.batch_input_dir, f))
+        
+        self.batch_images = all_images
+        
+        # 统计已处理（历史）和未处理
+        # 注意：这里的 pending 是基于历史记录的，用于增量处理
+        pending = [p for p in all_images if os.path.basename(p) not in self.processed_images]
+        
+        # 重置当前会话的“本次已处理”计数
+        self.current_session_processed = 0
+        
+        self.batch_count_label.config(text=f'已加载: {len(all_images)} 张图片')
+        if hasattr(self, 'batch_status_label'):
+             # UI显示：待处理(增量) | 本次已处理
+             self.batch_status_label.config(text=f'待处理: {len(pending)} 张 | 本次已处理: 0 张')
+        
+        if all_images:
+            self.show_toast(f'成功加载 {len(all_images)} 张图片')
+        else:
+            messagebox.showwarning('提示', '目录中没有图片文件')
     
     def batch_upload(self):
         """批量上传图片"""
@@ -1609,30 +2778,144 @@ class MainWindow(tk.Tk):
             self.batch_count_label.config(text=f'已选择: {len(self.batch_images)} 张图片')
             messagebox.showinfo('成功', f'已选择 {len(self.batch_images)} 张图片')
     
+    def get_random_color(self):
+        """随机获取颜色"""
+        import random
+        from constants import PRESET_COLORS
+        return random.choice(PRESET_COLORS)
+
+    def get_random_line_style(self):
+        """随机获取线条样式"""
+        import random
+        from constants import LINE_STYLES
+        return random.choice(LINE_STYLES)['id']
+
+    def get_random_pattern(self):
+        """随机获取边框图案"""
+        import random
+        from constants import BORDER_PATTERNS
+        # 排除 'none'
+        patterns = [p['id'] for p in BORDER_PATTERNS if p['id'] != 'none']
+        return random.choice(patterns) if patterns else 'dots'
+
+
+    def open_directory(self, path):
+        """打开目录 (跨平台)"""
+        if not path or not os.path.exists(path):
+            messagebox.showwarning('提示', '目录不存在')
+            return
+            
+        import platform
+        import subprocess
+        
+        system = platform.system()
+        try:
+            if system == 'Darwin':  # macOS
+                subprocess.run(['open', path])
+            elif system == 'Windows':  # Windows
+                os.startfile(path)
+            else:  # Linux
+                subprocess.run(['xdg-open', path])
+        except Exception as e:
+            print(f"打开目录失败: {e}")
+            messagebox.showerror('错误', f'无法打开目录: {e}')
+
     def batch_export(self):
         """批量导出图片"""
         if not self.batch_images:
-            messagebox.showwarning('提示', '请先批量上传图片！')
+            messagebox.showwarning('提示', '请先加载图片！')
             return
         
-        # 选择输出目录
-        output_dir = filedialog.askdirectory(title='选择输出目录')
+        # 使用记忆的输出目录或选择新目录
+        output_dir = self.batch_output_dir
+        if not output_dir or not os.path.isdir(output_dir):
+            output_dir = filedialog.askdirectory(title='选择输出目录', initialdir=self.batch_output_dir or None)
+            if output_dir:
+                self.batch_output_dir = output_dir
+                if hasattr(self, 'output_dir_label'):
+                    self.output_dir_label.config(text=output_dir)
+                self.save_settings()
+        
         if not output_dir:
+            return
+        
+        # 确定要处理的图片列表
+        # 如果 force_reprocess (batch_regenerate_all) 为 True，则处理所有图片
+        # 否则只处理输出目录中不存在的图片
+        force_reprocess = self.batch_regenerate_all.get()
+        images_to_process = []
+        
+        if force_reprocess:
+            images_to_process = self.batch_images
+        else:
+            for img_path in self.batch_images:
+                filename = os.path.basename(img_path)
+                # 检查输出文件是否存在 (假设输出为 PNG/JPG，这里简化检查)
+                # 实际上由于可能转格式，名字可能变... 简单起见，如果同名文件存在(忽略扩展名差异?)
+                # 这里暂且假设输出文件名保持原名(或加前缀/后缀)，这里先简单根据文件名判断
+                # 更严谨的逻辑：
+                name, _ = os.path.splitext(filename)
+                # 预期输出路径
+                # 假设输出为原扩展名，或者统一PNG? save() 方法目前保留原扩展名（JPG转RGB）
+                # 我们检查目录下是否有以 name 开头的文件?
+                # 简单点：只检查完全匹配的文件名（如果 save 保持文件名）
+                target_path = os.path.join(output_dir, filename)
+                if not os.path.exists(target_path):
+                    images_to_process.append(img_path)
+        
+        if not images_to_process:
+            messagebox.showinfo('提示', '没有需要处理的新图片 (已跳过已存在的文件)')
             return
         
         success_count = 0
         preset_width = self.current_size_preset['width']
         preset_height = self.current_size_preset['height']
         
-        for idx, img_path in enumerate(self.batch_images):
+        # 开始日志
+        self.batch_log(f"═══ 开始批量处理 ═══")
+        self.batch_log(f"待处理: {len(images_to_process)} 张图片")
+        if force_reprocess:
+            self.batch_log("模式: 强制重新处理 (覆盖)")
+        else:
+            self.batch_log("模式: 跳过已存在")
+            
+        self.batch_log(f"输出目录: {output_dir}")
+        self.batch_log(f"输出尺寸: {preset_width}x{preset_height}")
+        
+        # 记录本次会话处理数
+        self.current_session_processed = 0
+        
+        for idx, img_path in enumerate(images_to_process):
+            filename = os.path.basename(img_path)
+            self.batch_log(f"[{idx+1}/{len(images_to_process)}] 处理: {filename}")
+            self.update() # 刷新UI
+            
             try:
-                # 加载图片
+                # 1. 加载图片
                 processor = ImageProcessor()
                 processor.load_image(img_path)
                 processor.set_canvas_size(preset_width, preset_height)
                 processor.resize_to_canvas(maintain_ratio=True)
                 
-                # 生成复合图片
+                # 2. 准备边框配置 (支持随机化)
+                border_config = self.border_config.copy()
+                
+                if self.batch_random_color.get():
+                    new_color = self.get_random_color()
+                    border_config['color'] = new_color
+                    # 如果启用了图案且其颜色也是白色/默认，可能也需要随机？
+                    # 简单策略：如果随机颜色，且有图案，图案也用这个色？或者图案颜色保持？
+                    # 用户需求：Random Border Color. 
+                
+                if self.batch_random_style.get():
+                    border_config['line_style'] = self.get_random_line_style()
+                    
+                if self.batch_random_pattern.get():
+                    border_config['pattern'] = self.get_random_pattern()
+                    # 自动调整图案大小
+                    border_config['pattern_size'] = max(4, int(border_config['width'] * 0.6))
+                
+                # 3. 生成复合图片 (背景)
                 composite = CompositeImage(
                     preset_width,
                     preset_height,
@@ -1645,40 +2928,203 @@ class MainWindow(tk.Tk):
                     self.background_pattern_color,
                     self.background_pattern_size
                 )
-                composite.add_main_image(processor.current_image, fit_mode='contain')
                 
-                # 添加贴纸（使用当前画布的贴纸）
-                for sticker in self.canvas_widget.get_stickers():
-                    composite.add_sticker(sticker['text'], sticker['x'], sticker['y'], sticker['size'])
+                # [LOGGING] 记录参考参数
+                log_details = []
                 
-                # 添加边框 - 使用 border_config（当前自定义设置）
-                border_config = self.border_config.copy()
-                if border_config.get('width', 0) > 0:
-                    # 根据画布和导出尺寸缩放边框
-                    display_width = self.canvas_widget.width
-                    display_height = self.canvas_widget.height
-                    scale = max(preset_width / display_width, preset_height / display_height)
-                    border_config['width'] = int(border_config['width'] * scale)
-                    if 'radius' in border_config:
-                        border_config['radius'] = int(border_config['radius'] * scale)
-                    
-                    if border_config.get('radius', 0) > 0:
-                        composite.add_rounded_border(border_config)
+                # 4. 添加主图片
+                if self.batch_match_canvas.get():
+                    # 获取示例图的相对几何信息
+                    geom = self.canvas_widget.get_main_image_geometry()
+                    if geom:
+                        rel_x, rel_y, rel_w, rel_h = geom
+                        # 计算当前预设下的目标区域
+                        target_x = rel_x * preset_width
+                        target_y = rel_y * preset_height
+                        target_w = rel_w * preset_width
+                        target_h = rel_h * preset_height
+                        
+                        # [ENHANCED] 计算比例与缩放
+                        cur_img = processor.get_current_image()
+                        img_ratio = cur_img.width / cur_img.height if cur_img.height > 0 else 1.0
+                        box_ratio = target_w / target_h if target_h > 0 else 1.0
+                        
+                        # 估算相对画布的缩放比例 (以宽为例)
+                        # 假设原始 fit 是 contain 满画布
+                        default_fit_w = preset_width if img_ratio > (preset_width/preset_height) else (preset_height * img_ratio)
+                        scale_factor = target_w / default_fit_w if default_fit_w > 0 else 1.0
+                        
+                        # [SMART ALIGN] 智能对齐判断
+                        # 如果参考位置非常靠上 (比如前 5%)，则判定为顶部对齐
+                        # 如果参考位置非常靠下 (底部 5%)，则判定为底部对齐
+                        anchor = 'center'
+                        if rel_y < 0.05:
+                            anchor = 'n'
+                        elif (rel_y + rel_h) > 0.95:
+                            anchor = 's'
+                            
+                        # 如果高度非常接近 (Full Height)，对齐方式影响不大，但保持 Default
+                        
+                        composite.add_main_image_with_geometry(
+                            cur_img, 
+                            target_x, target_y, target_w, target_h,
+                            anchor=anchor
+                        )
+                        
+                        anchor_map = {'n': '顶部', 's': '底部', 'center': '居中'}
+                        log_details.append(f"参考位置: {rel_x:.2f},{rel_y:.2f} 尺寸: {rel_w:.2f}x{rel_h:.2f} => 目标: {int(target_x)},{int(target_y)} {int(target_w)}x{int(target_h)}")
+                        log_details.append(f"比例检查: 图片{img_ratio:.2f} vs 目标框{box_ratio:.2f} | 缩放倍率: {scale_factor:.2f}x | 对齐: {anchor_map.get(anchor)}")
                     else:
-                        composite.add_border(border_config)
+                        # 获取失败回退到默认
+                        composite.add_main_image(processor.get_current_image(), fit_mode='contain')
+                        log_details.append("参考位置获取失败，已回退到默认")
+                else:
+                    composite.add_main_image(processor.get_current_image(), fit_mode='contain')
+                    log_details.append("位置模式: 默认(适应画布)")
                 
-                # 保存
-                filename = os.path.basename(img_path)
-                save_path = os.path.join(output_dir, f"processed_{filename}")
-                if composite.save(save_path):
-                    success_count += 1
+                # 记录边框随机化结果
+                if self.batch_random_color.get():
+                    log_details.append(f"随机颜色: {border_config.get('color')}")
+                if self.batch_random_style.get():
+                    log_details.append(f"随机样式: {border_config.get('line_style')}")
+                if self.batch_random_pattern.get():
+                    log_details.append(f"随机图案: {border_config.get('pattern')}")
+                
+                # 打印日志
+                if log_details:
+                    self.batch_log(f"  参数: {'; '.join(log_details)}")
+
+                # 5. 应用边框到复合图片
+                
+                # [SCALE FIX] 计算分辨率缩放比例
+                # 边框宽度是在画布上视觉调整的，导出时应随分辨率缩放
+                display_width = self.canvas_widget.width
+                preview_scale = 1.0
+                if display_width > 0:
+                    preview_scale = preset_width / display_width
+                
+                # 复制配置并应用缩放
+                scaled_border_config = border_config.copy()
+                if preview_scale != 1.0:
+                    scaled_border_config['width'] = int(border_config.get('width', 0) * preview_scale)
+                    scaled_border_config['radius'] = int(border_config.get('radius', 0) * preview_scale)
+                    scaled_border_config['pattern_size'] = int(border_config.get('pattern_size', 0) * preview_scale)
                     
+                    # 如果有随机化图案，pattern_size 已经在上面被覆盖了，这里重新缩放
+                    # 注意：上面代码中 random_pattern 设定了 pattern_size = int(width * 0.6)
+                    # 如果 random 逻辑修改了 width，这里也应该基于 scaled width
+                    
+                # 根据形状判断调用哪个方法
+                if scaled_border_config.get('shape') in ('rounded_rect', 'circle', 'ellipse') or scaled_border_config.get('radius', 0) > 0:
+                    composite.add_rounded_border(scaled_border_config)
+                else:
+                    composite.add_border(scaled_border_config)
+                
+                # 添加贴纸 (需要在新尺寸下重新计算坐标)
+                display_width = self.canvas_widget.width
+                display_height = self.canvas_widget.height
+                # 避免除以零
+                if display_width > 0 and display_height > 0:
+                    scale = max(preset_width / display_width, preset_height / display_height)
+                else:
+                    scale = 1.0
+                
+                for sticker in self.canvas_widget.get_stickers():
+                    # 计算缩放后的位置和大小
+                    scaled_x = int(sticker['x'] * scale)
+                    scaled_y = int(sticker['y'] * scale)
+                    scaled_size = int(sticker['size'] * scale)
+                    
+                    # 简单的贴纸添加 (暂不使用复杂Emoji渲染以保证稳定性，或者复用逻辑)
+                    # 复用之前的Emoji渲染逻辑
+                    try:
+                        base_size = 160
+                        font = ImageFont.truetype("/System/Library/Fonts/Apple Color Emoji.ttc", base_size)
+                        temp_size = base_size * 2
+                        emoji_temp = Image.new('RGBA', (temp_size, temp_size), (0, 0, 0, 0))
+                        emoji_draw = ImageDraw.Draw(emoji_temp)
+                        emoji_draw.text((temp_size // 2, temp_size // 2), sticker['text'], font=font, anchor="mm", embedded_color=True)
+                        bbox = emoji_temp.getbbox()
+                        if bbox:
+                            emoji_cropped = emoji_temp.crop(bbox)
+                            emoji_resized = emoji_cropped.resize((scaled_size, scaled_size), Image.Resampling.LANCZOS)
+                            paste_x = scaled_x - scaled_size // 2
+                            paste_y = scaled_y - scaled_size // 2
+                            if composite.canvas.mode != 'RGBA':
+                                composite.canvas = composite.canvas.convert('RGBA')
+                            composite.canvas.paste(emoji_resized, (paste_x, paste_y), emoji_resized)
+                    except Exception as e:
+                        # 降级处理
+                        composite.add_sticker(sticker['text'], scaled_x, scaled_y, scaled_size)
+                
+                # 6. 添加文字层
+                text_content = None
+                
+                # 方式1: 从文本目录读取对应的 .txt 文件
+                if self.batch_use_text_dir.get() and self.batch_text_dir:
+                    base_name = os.path.splitext(filename)[0]
+                    txt_path = os.path.join(self.batch_text_dir, base_name + '.txt')
+                    
+                    if os.path.exists(txt_path):
+                        try:
+                            with open(txt_path, 'r', encoding='utf-8') as f:
+                                text_content = f.read().strip()
+                            self.batch_log(f"  文字: 从 {base_name}.txt 读取")
+                        except Exception as e:
+                            self.batch_log(f"  文字: 读取失败 - {e}")
+                    else:
+                        # 尝试 default.txt
+                        default_txt = os.path.join(self.batch_text_dir, 'default.txt')
+                        if os.path.exists(default_txt):
+                            try:
+                                with open(default_txt, 'r', encoding='utf-8') as f:
+                                    text_content = f.read().strip()
+                                self.batch_log(f"  文字: 使用 default.txt")
+                            except:
+                                pass
+                
+                # 方式2: 使用编辑器中的文字配置 (如果没有从文件读取)
+                elif self.text_layers and len(self.text_layers) > 0:
+                    text_layer = self.text_layers[0]
+                    text_content = text_layer.content
+                    if text_content:
+                        self.batch_log(f"  文字: 使用编辑器配置")
+                
+                # 应用文字层
+                if text_content:
+                    from image_processor import TextLayer
+                    text_layer = TextLayer(
+                        content=text_content,
+                        font_size=self.current_text_config.get('font_size', 48),
+                        color=self.current_text_config.get('color', '#FFFFFF'),
+                        font_family=self.current_text_config.get('font_family', 'pingfang'),
+                        align=self.current_text_config.get('align', 'center'),
+                        position=self.current_text_config.get('position', 'bottom'),
+                        margin=self.current_text_config.get('margin', 20),
+                        shadow=self.current_text_config.get('shadow'),
+                        stroke=self.current_text_config.get('stroke'),
+                    )
+                    composite.add_text_layer(text_layer, scale=preview_scale)
+                
+                # 7. 保存
+                save_path = os.path.join(output_dir, filename)
+                if composite.save(save_path):
+                    self.batch_log(f"  └─ 成功: {filename}")
+                    success_count += 1
+                    self.current_session_processed += 1
+                else:
+                    self.batch_log(f"  └─ 失败: 保存出错")
+            
             except Exception as e:
-                print(f"处理图片 {img_path} 失败: {e}")
+                self.batch_log(f"  └─ 错误: {str(e)}")
+                import traceback
+                traceback.print_exc()
         
-        
-        messagebox.showinfo('完成', f'批量处理完成！\n成功: {success_count}/{len(self.batch_images)}')
-    
+        self.batch_log(f"═══ 处理完成 ═══")
+        self.batch_log(f"成功: {success_count} / {len(images_to_process)}")
+        self.update_batch_status_text()
+        messagebox.showinfo('完成', f'批量处理完成！\n成功: {success_count}\n失败: {len(images_to_process) - success_count}')
+
     def save_history(self, action_name="操作"):
         """保存历史记录"""
         import copy
@@ -2430,7 +3876,12 @@ class MainWindow(tk.Tk):
                 font=('SF Pro Text', 10, 'bold') if is_selected else ('SF Pro Text', 10),
                 width=6, pady=6, cursor='hand2'
             )
-            btn.grid(row=0, column=idx, padx=4)
+            
+            # 两排布局 (每排5个)
+            row = idx // 5
+            col = idx % 5
+            btn.grid(row=row, column=col, padx=4, pady=4)
+            
             btn.bind('<Button-1>', lambda e, p=pattern['id']: self.set_border_pattern(p))
             self.border_pattern_buttons[pattern['id']] = btn
         
@@ -2546,6 +3997,9 @@ class MainWindow(tk.Tk):
     def set_border_pattern(self, pattern_id):
         """设置边框图案"""
         self.border_config['pattern'] = pattern_id
+        # 切换图案时也确保尺寸正确
+        current_width = self.border_config.get('width', 10)
+        self.border_config['pattern_size'] = max(4, int(current_width * 0.6))
         # 更新按钮选中状态
         if hasattr(self, 'border_pattern_buttons'):
             for pid, btn in self.border_pattern_buttons.items():
@@ -2826,6 +4280,48 @@ class MainWindow(tk.Tk):
         self.background_image = None
         self.canvas_widget.set_background_color(self.background_color)
         print("✓ 背景图片已清除")
+    
+    def generate_theme_thumbnail(self, theme, size=50):
+        """生成主题缩略图"""
+        from PIL import Image, ImageDraw, ImageTk
+        
+        # 创建缩略图画布
+        img = Image.new('RGB', (size, size), theme.get('background_color', '#FFFFFF'))
+        draw = ImageDraw.Draw(img)
+        
+        # 绘制背景图案（简化版）
+        pattern = theme.get('background_pattern', 'none')
+        pattern_color = theme.get('background_pattern_color', '#E0E0E0')
+        if pattern == 'grid':
+            spacing = 10
+            for x in range(0, size, spacing):
+                draw.line([(x, 0), (x, size)], fill=pattern_color, width=1)
+            for y in range(0, size, spacing):
+                draw.line([(0, y), (size, y)], fill=pattern_color, width=1)
+        elif pattern == 'dots':
+            spacing = 8
+            for x in range(spacing//2, size, spacing):
+                for y in range(spacing//2, size, spacing):
+                    draw.ellipse([x-1, y-1, x+1, y+1], fill=pattern_color)
+        elif pattern == 'stripe':
+            spacing = 6
+            for i in range(-size, size, spacing):
+                draw.line([(i, 0), (i + size, size)], fill=pattern_color, width=1)
+        
+        # 绘制边框
+        border_config = theme.get('border_config', {})
+        border_width = min(border_config.get('width', 0) // 3, 5)  # 缩小边框
+        if border_width > 0:
+            border_color = border_config.get('color', '#000000')
+            radius = min(border_config.get('radius', 0) // 4, 8)
+            if radius > 0:
+                draw.rounded_rectangle([0, 0, size-1, size-1], radius=radius, outline=border_color, width=border_width)
+            else:
+                for i in range(border_width):
+                    draw.rectangle([i, i, size-1-i, size-1-i], outline=border_color)
+        
+        # 转换为 PhotoImage
+        return ImageTk.PhotoImage(img)
         
     def get_current_theme_state(self):
         """获取当前主题状态"""
@@ -2891,8 +4387,13 @@ class MainWindow(tk.Tk):
             new_s['id'] = s_id
             self.canvas_widget.stickers.append(new_s)
             
-    def save_preset_theme(self, index=None):
-        """保存当前为预设主题"""
+    def save_preset_theme(self, index=None, silent=False):
+        """保存当前为预设主题
+        
+        Args:
+            index: 保存到的索引位置（目前未使用）
+            silent: 如果为True，则不显示成功提示
+        """
         state = self.get_current_theme_state()
         
         if len(self.preset_themes) >= 8:
@@ -2905,7 +4406,9 @@ class MainWindow(tk.Tk):
         
         self.update_preset_theme_display()
         self.update_left_preset_display()
-        messagebox.showinfo("成功", "主题已保存！")
+        
+        if not silent:
+            messagebox.showinfo("成功", "主题已保存！")
 
     def apply_preset_theme(self, index):
         """应用预设主题"""
@@ -2915,25 +4418,34 @@ class MainWindow(tk.Tk):
     def update_preset_theme_display(self):
         """更新预设主题显示区域"""
         if hasattr(self, 'preset_grid_frame'):
-             for widget in self.preset_grid_frame.winfo_children():
+            for widget in self.preset_grid_frame.winfo_children():
                 widget.destroy()
-             
-             for i in range(8):
-                row = i // 3
-                col = i % 3
+            
+            # 清理旧的缩略图引用
+            if not hasattr(self, 'preset_thumbnails'):
+                self.preset_thumbnails = []
+            self.preset_thumbnails.clear()
+            
+            for i in range(8):
+                row = i // 4
+                col = i % 4
                 
                 container = tk.Frame(self.preset_grid_frame, bg=COLORS['panel_bg'])
-                container.grid(row=row, column=col, padx=6, pady=6)
+                container.grid(row=row, column=col, padx=4, pady=4)
                 
                 if i < len(self.preset_themes):
+                    # 生成缩略图
+                    theme = self.preset_themes[i]
+                    thumbnail = self.generate_theme_thumbnail(theme, size=50)
+                    self.preset_thumbnails.append(thumbnail)
+                    
                     btn = tk.Label(
                         container,
-                        text=f"预设 {i+1}",
+                        image=thumbnail,
                         bg=COLORS['bg_tertiary'],
-                        fg=COLORS['text_primary'],
-                        font=('SF Pro Text', 11),
-                        width=8, height=3,
-                        cursor='hand2'
+                        cursor='hand2',
+                        relief=tk.FLAT,
+                        bd=2
                     )
                     btn.pack()
                     btn.bind('<Button-1>', lambda e, idx=i: self.apply_preset_theme(idx))
@@ -2948,8 +4460,8 @@ class MainWindow(tk.Tk):
                         text="＋",
                         bg=COLORS['bg_secondary'],
                         fg=COLORS['text_secondary'],
-                        font=('SF Pro Text', 16),
-                        width=8, height=3,
+                        font=('SF Pro Text', 14),
+                        width=5, height=2,
                         cursor='hand2'
                     )
                     btn.pack()
@@ -2969,21 +4481,30 @@ class MainWindow(tk.Tk):
         for widget in self.left_preset_grid.winfo_children():
             widget.destroy()
         
+        # 清理旧的缩略图引用
+        if not hasattr(self, 'left_preset_thumbnails'):
+            self.left_preset_thumbnails = []
+        self.left_preset_thumbnails.clear()
+        
         # 创建2列4行的按钮网格
         for i in range(8):
             row = i // 2
             col = i % 2
             
             if i < len(self.preset_themes):
-                # 已保存的预设
+                # 生成缩略图
+                theme = self.preset_themes[i]
+                thumbnail = self.generate_theme_thumbnail(theme, size=40)
+                self.left_preset_thumbnails.append(thumbnail)
+                
+                # 已保存的预设 - 使用缩略图
                 btn = tk.Label(
                     self.left_preset_grid,
-                    text=f"主题{i+1}",
+                    image=thumbnail,
                     bg=COLORS['bg_tertiary'],
-                    fg=COLORS['text_primary'],
-                    font=('SF Pro Text', 9),
-                    width=6, height=2,
-                    cursor='hand2'
+                    cursor='hand2',
+                    relief=tk.FLAT,
+                    bd=1
                 )
                 btn.grid(row=row, column=col, padx=2, pady=2, sticky='ew')
                 btn.bind('<Button-1>', lambda e, idx=i: self.apply_preset_theme(idx))
@@ -3000,7 +4521,7 @@ class MainWindow(tk.Tk):
                     bg=COLORS['bg_secondary'],
                     fg=COLORS['text_secondary'],
                     font=('SF Pro Text', 12),
-                    width=6, height=2,
+                    width=4, height=2,
                     cursor='hand2'
                 )
                 btn.grid(row=row, column=col, padx=2, pady=2, sticky='ew')

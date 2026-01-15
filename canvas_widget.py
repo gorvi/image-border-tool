@@ -5,13 +5,15 @@
 import tkinter as tk
 from tkinter import Canvas
 from PIL import Image, ImageTk
+import math
+from constants import COLORS
 
 
 class CanvasWidget(tk.Frame):
     """画布组件"""
     
     def __init__(self, parent, width=800, height=600):
-        super().__init__(parent)
+        super().__init__(parent, bg=COLORS['bg'])
         self.width = width
         self.height = height
         
@@ -25,7 +27,7 @@ class CanvasWidget(tk.Frame):
             borderwidth=0,
             highlightthickness=0
         )
-        self.canvas.pack(padx=0, pady=0)
+        self.canvas.pack(padx=0, pady=0, expand=True)
         
         # 存储画布对象
         self.canvas_items = []
@@ -85,6 +87,9 @@ class CanvasWidget(tk.Frame):
         if self.selected_item:
             self.canvas.tag_lower(self.selected_item, 'main_image')
             self.canvas.tag_lower(self.selected_item, 'sticker')
+            self.canvas.tag_lower(self.selected_item, 'text_layer')
+            # 确保在背景图案之上
+            self.canvas.tag_raise(self.selected_item, 'background_pattern')
             self._ensure_layer_order()
 
     def move_up(self):
@@ -94,7 +99,7 @@ class CanvasWidget(tk.Frame):
             if above:
                 tags = self.canvas.gettags(above)
                 # 只能在图片和贴纸之间移动，不能穿透边框
-                if 'sticker' in tags or 'main_image' in tags:
+                if 'sticker' in tags or 'main_image' in tags or 'text_layer' in tags:
                     self.canvas.tag_raise(self.selected_item, above)
             self._ensure_layer_order()
 
@@ -104,7 +109,7 @@ class CanvasWidget(tk.Frame):
             below = self.canvas.find_below(self.selected_item)
             if below:
                 tags = self.canvas.gettags(below)
-                if 'sticker' in tags or 'main_image' in tags:
+                if 'sticker' in tags or 'main_image' in tags or 'text_layer' in tags:
                     self.canvas.tag_lower(self.selected_item, below)
             self._ensure_layer_order()
     
@@ -120,14 +125,15 @@ class CanvasWidget(tk.Frame):
         self.canvas.tag_lower('background_image')
         # 2. 背景图案
         self.canvas.tag_raise('background_pattern', 'background_image')
-        # 3. 主图片
-        self.canvas.tag_raise('main_image', 'background_pattern')
-        # 4. 贴纸
-        self.canvas.tag_raise('sticker', 'main_image')
-        # 5. 边框 (必须在贴纸之上)
-        self.canvas.tag_raise('border', 'sticker')
+        # 3. 内容层 (图片、贴纸、文字) 之间的顺序由用户控制，不在这里强制
+        # 4. 边框 (必须在所有内容之上)
+        # 找到所有内容元素
+        for tag in ['main_image', 'sticker', 'text_layer']:
+            self.canvas.tag_raise('corner_mask', tag)
+        
+        self.canvas.tag_raise('border', 'corner_mask')
         self.canvas.tag_raise('border_image', 'border')
-        # 6. 手柄 (必须在边框之上才能点击)
+        # 5. 手柄 (必须在边框之上才能点击)
         self.canvas.tag_raise('handle')
 
     def display_image(self, pil_image):
@@ -172,11 +178,38 @@ class CanvasWidget(tk.Frame):
         # 强制重排图层
         self._ensure_layer_order()
     
+    def clear_main_image(self):
+        """清除主图片"""
+        self.canvas.delete('main_image')
+        self.main_image_id = None
+        self.photo = None
+        self.original_pil_image = None
+        self.current_display_size = None
+    
     def add_sticker(self, emoji_text, font_size=48):
         """添加贴纸"""
-        # 在画布中心添加贴纸
-        x = self.width // 2
-        y = self.height // 2
+        import random
+        
+        # 贴纸默认放置在四角边框内侧位置
+        margin = font_size + 30  # 边框内侧留出边距
+        
+        # 四个角落的位置（按顺序：左下、右下、左上、右上）
+        corners = [
+            (margin, self.height - margin),  # 左下
+            (self.width - margin, self.height - margin),  # 右下
+            (margin, margin),  # 左上
+            (self.width - margin, margin),  # 右上
+        ]
+        
+        # 按贴纸数量循环选择角落
+        corner_index = len(self.stickers) % 4
+        base_x, base_y = corners[corner_index]
+        
+        # 添加小偏移避免完全重叠
+        offset_x = random.randint(-15, 15)
+        offset_y = random.randint(-15, 15)
+        x = max(margin, min(self.width - margin, base_x + offset_x))
+        y = max(margin, min(self.height - margin, base_y + offset_y))
         
         sticker_id = self.canvas.create_text(
             x, y,
@@ -226,22 +259,37 @@ class CanvasWidget(tk.Frame):
         except Exception as e:
             print(f"应用边框图片失败: {e}")
     
+    
     def apply_custom_border(self, config):
         """应用自定义边框配置"""
         self.canvas.delete('border')
         self.canvas.delete('border_image')
+        self.canvas.delete('corner_mask') # 清除旧遮罩
         
-        # shape = config.get('shape', 'rectangle') # 不再需要shape，完全由radius决定
-        # shape = config.get('shape', 'rectangle') # 不再需要shape，完全由radius决定
         border_width = config.get('width', 0)
         radius = config.get('radius', 0)
         color = config.get('color', '#000000')
         line_style = config.get('line_style', 'solid')
         pattern = config.get('pattern', 'none')
         
-        if border_width <= 0:
-            return
+        # 始终绘制遮罩以模拟画布圆角（即使没有边框宽度，只要有圆角）
+        # 如果边框宽度>0，遮罩在边框下；如果不画边框但有圆角，也需要遮罩
+        if radius > 0:
+            # 遮罩颜色应为 APP背景色，以模拟透明
+            mask_color = COLORS['bg']
+            # 我们需要获取画布当前尺寸
+            self.canvas.update_idletasks()
+            w = self.canvas.winfo_width() 
+            h = self.canvas.winfo_height()
+            if w <= 1: w = self.width
+            if h <= 1: h = self.height
+            
+            self.draw_corner_masks(radius, mask_color, w, h)
         
+        if border_width <= 0:
+            self._ensure_layer_order()
+            return
+
         # 获取画布实际尺寸
         self.canvas.update_idletasks()
         canvas_w = self.canvas.winfo_width()
@@ -253,51 +301,91 @@ class CanvasWidget(tk.Frame):
         if canvas_h <= 1:
             canvas_h = self.height
         
-        # 设置线条样式
+        # Setting line style
         dash_pattern = None
         if line_style == 'dashed':
             dash_pattern = (10, 5)
         elif line_style == 'dotted':
             dash_pattern = (3, 3)
         
-        # 统一使用圆角矩形逻辑（支持radius=0即直角，也支持双线）
         if line_style == 'double':
-            # 双线边框 (支持圆角)
+            # Double border (supports rounded)
             outer_width = max(1, border_width // 3)
             inner_width = max(1, border_width // 3)
             gap = border_width - outer_width - inner_width
             
-            # 外线
+            # Outer line
             self.draw_rounded_rectangle(outer_width, radius, color, canvas_w, canvas_h, dash_pattern)
             
-            # 内线
-            # 内线需要缩小绘制区域，并调整圆角半径
+            # Inner line
             offset = outer_width + gap
             inner_w = canvas_w - 2 * offset
             inner_h = canvas_h - 2 * offset
             inner_radius = max(0, radius - offset)
             
-            # 由于draw_rounded_rectangle默认全画布，这里我们需要临时调整逻辑或传递offset?
-            # draw_rounded_rectangle目前没有offset参数。
-            # 我们可以直接在该方法外部手动计算坐标调用 self.draw_rounded_rect_at(...) 
-            # 或者简单地，为了避免改动太大，我们再次调用 draw_rounded_rectangle 但需要先实现一个带偏移的版本?
-            # 实际上 draw_rounded_rectangle 内部是 0,0 到 w,h。
-            # 如果我们想画内线，我们最好手动调用绘制逻辑，或者改进 draw_rounded_rectangle。
-            
-            # 简单起见，既然 draw_rounded_rectangle 比较复杂（画了4条线+4个弧），
-            # 不如直接用 offset 绘制内层。
-            # 但为了复用代码，我们可以给 draw_rounded_rectangle 增加 offset 参数！
-            
             self.draw_rounded_rectangle(inner_width, inner_radius, color, canvas_w, canvas_h, dash_pattern, offset=offset)
             
         else:
-            # 普通/虚线/点线边框
+            # Normal/Dashed/Dotted border
             self.draw_rounded_rectangle(border_width, radius, color, canvas_w, canvas_h, dash_pattern)
         
         if pattern and pattern != 'none':
-            self.draw_border_pattern(pattern, border_width, canvas_w, canvas_h, config.get('pattern_color', '#FFFFFF'))
+            pattern_size = config.get('pattern_size', 10)
+            self.draw_border_pattern(pattern, border_width, canvas_w, canvas_h, config.get('pattern_color', '#FFFFFF'), pattern_size)
             
         self._ensure_layer_order()
+
+    def draw_corner_masks(self, radius, color, w, h):
+        """绘制角落遮罩以模拟圆角"""
+        # 确保圆角不超限
+        r = min(radius, min(w, h) // 2)
+        if r <= 0: return
+
+        # 定义四个角的遮罩多边形
+        # 每个遮罩是一个覆盖角区域的多边形，但在圆角处是内凹的
+        
+        # 辅助函数：生成圆弧点
+        def get_arc_points(cx, cy, r, start_angle, end_angle, steps=10):
+            points = []
+            for i in range(steps + 1):
+                angle = math.radians(start_angle + (end_angle - start_angle) * i / steps)
+                px = cx + r * math.cos(angle)
+                py = cy + r * math.sin(angle)
+                points.append(px)
+                points.append(py)
+            return points
+
+        # 左上角
+        # 路径: (0,0) -> (r,0) -> arc to (0,r) -> (0,0)
+        # 注意: Canvas坐标系y向下
+        # 圆心(r,r), 角度从270(上)到180(左) -> 逆时针? 
+        # sin(270)=-1, cos(270)=0 -> (r, 0)
+        # sin(180)=0, cos(180)=-1 -> (0, r)
+        tl_points = [0, 0, r, 0] + get_arc_points(r, r, r, 270, 180) + [0, r]
+        self.canvas.create_polygon(tl_points, fill=color, outline=color, tags='corner_mask')
+
+        # 右上角
+        # (w,0) -> (w,r) -> arc to (w-r,0) -> (w,0)
+        # 圆心(w-r, r)
+        # angles: 0(右)到270(上)?
+        # cos(0)=1 -> w, sin(0)=0 -> r. -> (w,r) (Right point)
+        # cos(270)=0 -> w-r, sin(270)=-1 -> 0. -> (w-r, 0) (Top point)
+        tr_points = [w, 0, w, r] + get_arc_points(w-r, r, r, 0, -90) + [w-r, 0]
+        self.canvas.create_polygon(tr_points, fill=color, outline=color, tags='corner_mask')
+        
+        # 右下角
+        # (w,h) -> (w-r,h) -> arc to (w,h-r) -> (w,h)
+        # 圆心(w-r, h-r)
+        # angles: 90(下)到0(右)
+        br_points = [w, h, w-r, h] + get_arc_points(w-r, h-r, r, 90, 0) + [w, h-r]
+        self.canvas.create_polygon(br_points, fill=color, outline=color, tags='corner_mask')
+
+        # 左下角
+        # (0,h) -> (0,h-r) -> arc to (r,h) -> (0,h)
+        # 圆心(r, h-r)
+        # angles: 180(左)到90(下)
+        bl_points = [0, h, 0, h-r] + get_arc_points(r, h-r, r, 180, 90) + [r, h]
+        self.canvas.create_polygon(bl_points, fill=color, outline=color, tags='corner_mask')
     
     def draw_rounded_rectangle(self, border_width, radius, color, canvas_w=None, canvas_h=None, dash_pattern=None, offset=0):
         """绘制圆角矩形边框"""
@@ -351,7 +439,7 @@ class CanvasWidget(tk.Frame):
                                   start=270, extent=90, style='arc', 
                                   outline=color, tags='border')
     
-    def draw_border_pattern(self, pattern, border_width, canvas_w, canvas_h, pattern_color):
+    def draw_border_pattern(self, pattern, border_width, canvas_w, canvas_h, pattern_color, pattern_size=10):
         """在边框区域内绘制图案"""
         if not pattern or pattern == 'none' or border_width <= 2:
             return
@@ -393,8 +481,8 @@ class CanvasWidget(tk.Frame):
                                        fill=pattern_color, outline='', tags='border')
         
         elif pattern == 'grid':
-            # 网格图案 - 使用全局坐标以确保对齐
-            spacing = max(6, bw // 2)
+            # 网格图案 - 使用 pattern_size 控制间距
+            spacing = max(pattern_size, 6)
             
             # 绘制竖线 (遍历整个宽度)
             for x in range(0, canvas_w, spacing):
@@ -465,6 +553,70 @@ class CanvasWidget(tk.Frame):
                 points.append(y)
             if len(points) >= 4:
                 self.canvas.create_line(points, fill=pattern_color, smooth=True, tags='border')
+        
+        elif pattern in ('heart', 'club', 'triangle', 'diamond'):
+            # 通用几何图形图案
+            spacing = max(pattern_size * 2, 10)
+            icon_size = max(pattern_size, 4)
+            step = spacing
+            
+            # 辅助函数: 在指定位置绘制图案
+            def draw_shape(cx, cy):
+                if pattern == 'triangle':
+                    h = icon_size * 0.866
+                    pts = [
+                        cx, cy - h/2,
+                        cx - icon_size/2, cy + h/2,
+                        cx + icon_size/2, cy + h/2
+                    ]
+                    self.canvas.create_polygon(pts, fill=pattern_color, outline='', tags='border')
+                
+                elif pattern == 'diamond':
+                    r = icon_size / 2
+                    pts = [
+                        cx, cy - r,
+                        cx + r, cy,
+                        cx, cy + r,
+                        cx - r, cy
+                    ]
+                    self.canvas.create_polygon(pts, fill=pattern_color, outline='', tags='border')
+                    
+                elif pattern == 'club':
+                    r = icon_size / 3
+                    # 三个圆
+                    self.canvas.create_oval(cx-r, cy-r-r, cx+r, cy-r+r, fill=pattern_color, outline='', tags='border')
+                    # 左下/右下计算略繁琐，简化为固定偏移
+                    dx = r * 0.866
+                    dy = r * 0.5
+                    self.canvas.create_oval(cx-dx-r, cy+dy-r, cx-dx+r, cy+dy+r, fill=pattern_color, outline='', tags='border')
+                    self.canvas.create_oval(cx+dx-r, cy+dy-r, cx+dx+r, cy+dy+r, fill=pattern_color, outline='', tags='border')
+                    # 茎
+                    self.canvas.create_polygon(cx, cy, cx-r/3, cy+r*2, cx+r/3, cy+r*2, fill=pattern_color, outline='', tags='border')
+
+                elif pattern == 'heart':
+                    # 简化绘制: 两个圆 + 一个三角形? 或者贝塞尔曲线
+                    # 这里使用简单的点集模拟（因为 Canvas 没有直接的心形指令）
+                    import math
+                    pts = []
+                    # 适当减少点数以提高性能
+                    for t in range(0, 360, 30): 
+                        rad = math.radians(t)
+                        px = cx + (icon_size/32) * (16 * math.sin(rad)**3)
+                        py = cy - (icon_size/32) * (13 * math.cos(rad) - 5 * math.cos(2*rad) - 2 * math.cos(3*rad) - math.cos(4*rad))
+                        pts.append(px)
+                        pts.append(py)
+                    self.canvas.create_polygon(pts, fill=pattern_color, outline='', tags='border', smooth=True)
+
+            # 沿边框绘制
+            # 上下边框
+            for x in range(step//2, canvas_w, step):
+                draw_shape(x, bw // 2)
+                draw_shape(x, canvas_h - bw // 2)
+                
+            # 左右边框
+            for y in range(bw + step//2, canvas_h - bw, step):
+                draw_shape(bw // 2, y)
+                draw_shape(canvas_w - bw // 2, y)
     
     def set_background_color(self, color):
         """设置画布背景色"""
@@ -655,12 +807,12 @@ class CanvasWidget(tk.Frame):
                 self.drag_start_y = event.y
                 return
 
-        # 2. 识别贴纸或图片
+        # 2. 识别贴纸、图片或文字
         # 按从上到下的顺序查找
         items = self.canvas.find_overlapping(event.x - 2, event.y - 2, event.x + 2, event.y + 2)
         for item in reversed(items):
             tags = self.canvas.gettags(item)
-            if 'sticker' in tags or 'main_image' in tags:
+            if 'sticker' in tags or 'main_image' in tags or 'text_layer' in tags:
                 self.selected_item = item
                 self.dragging_item = item
                 self.drag_start_x = event.x
@@ -680,6 +832,47 @@ class CanvasWidget(tk.Frame):
         self._hide_scaling_handles()
         self.selected_item = None
         self.selected_sticker = None
+        
+    def add_text_layer_item(self, pil_image, x, y):
+        """添加文字层作为独立对象"""
+        # 检查文字层是否当前被选中，如果是，需要更新选中引用
+        was_selected = False
+        if self.selected_item:
+            tags = self.canvas.gettags(self.selected_item)
+            if 'text_layer' in tags:
+                was_selected = True
+        
+        self.canvas.delete('text_layer')
+        
+        self.text_pil_image = pil_image
+        self.text_photo = ImageTk.PhotoImage(pil_image)
+        
+        # 创建图片对象
+        text_id = self.canvas.create_image(
+            x, y,
+            image=self.text_photo,
+            anchor=tk.NW, # 文字渲染通常从左上角开始
+            tags='text_layer'
+        )
+        # 确保在贴纸之上，边框之下
+        self._ensure_layer_order()
+        
+        # 如果之前被选中，更新引用并重绘手柄
+        if was_selected:
+            self.selected_item = text_id
+            self._create_scaling_handles(text_id)
+            
+        return text_id
+    
+    def clear_text_layer(self):
+        """清除文字层"""
+        self.canvas.delete('text_layer')
+        self.text_pil_image = None
+        self.text_photo = None
+        
+    def set_text_callback(self, callback):
+        """设置文字交互回调"""
+        self.on_text_interaction = callback
     
     def on_canvas_drag(self, event):
         """画布拖拽事件"""
@@ -704,6 +897,26 @@ class CanvasWidget(tk.Frame):
                         sticker['size'] = new_size
                         self.canvas.itemconfigure(self.selected_item, font=('Arial', new_size))
                         break
+            
+            elif 'text_layer' in tags:
+                # 文字层缩放：通过回调通知主窗口调整字号
+                if hasattr(self, 'on_text_interaction') and self.on_text_interaction:
+                    # 简单的缩放因子计算
+                    if 's' in self.handle_type or 'e' in self.handle_type:
+                        delta = max(dx, dy)
+                    else:
+                        delta = -max(-dx, -dy)
+                    
+                    # 避免过快
+                    if abs(delta) > 5:
+                        factor = 1.0 + (delta / 200.0)
+                        self.on_text_interaction('scale', factor=factor)
+                        
+                        # 重置 drag start 防止累积过快
+                        self.drag_start_x = event.x
+                        self.drag_start_y = event.y
+                return
+                
             elif 'main_image' in tags:
                 # 图片缩放：重新渲染图片
                 if hasattr(self, 'original_pil_image') and hasattr(self, 'current_display_size'):
@@ -744,13 +957,26 @@ class CanvasWidget(tk.Frame):
             self.drag_start_x = event.x
             self.drag_start_y = event.y
             
+            tags = self.canvas.gettags(self.dragging_item)
+            
             # 更新贴纸数据
-            for sticker in self.stickers:
-                if sticker['id'] == self.dragging_item:
-                    coords = self.canvas.coords(sticker['id'])
-                    if len(coords) == 2:
-                        sticker['x'], sticker['y'] = coords
-                    break
+            if 'sticker' in tags:
+                for sticker in self.stickers:
+                    if sticker['id'] == self.dragging_item:
+                        coords = self.canvas.coords(sticker['id'])
+                        if len(coords) == 2:
+                            sticker['x'] = coords[0]
+                            sticker['y'] = coords[1]
+                        break
+            
+            # 更新文字位置 (通过回调)
+            elif 'text_layer' in tags:
+                coords = self.canvas.coords(self.dragging_item)
+                # create_image returns x,y but if dragged, coords might be same.
+                # anchor logic might apply. image with anchor NW, coords is x,y.
+                if len(coords) == 2:
+                    if hasattr(self, 'on_text_interaction') and self.on_text_interaction:
+                         self.on_text_interaction('move', x=coords[0], y=coords[1])
     
     def on_canvas_release(self, event):
         """画布释放事件"""
@@ -758,12 +984,28 @@ class CanvasWidget(tk.Frame):
         self.handle_type = None
     
     def delete_selected_sticker(self):
-        """删除选中的贴纸"""
-        if self.selected_sticker:
-            self.canvas.delete(self.selected_sticker)
-            self.stickers = [s for s in self.stickers if s['id'] != self.selected_sticker]
+        """删除选中项"""
+        if not self.selected_item:
+            return False
+            
+        tags = self.canvas.gettags(self.selected_item)
+        
+        if 'sticker' in tags:
+            self.canvas.delete(self.selected_item)
+            self.stickers = [s for s in self.stickers if s['id'] != self.selected_item]
             self.selected_sticker = None
+            self.selected_item = None
+            self._hide_scaling_handles()
             return True
+            
+        elif 'text_layer' in tags:
+            self.clear_text_layer()
+            if hasattr(self, 'on_text_interaction') and self.on_text_interaction:
+                 self.on_text_interaction('delete')
+            self.selected_item = None
+            self._hide_scaling_handles()
+            return True
+            
         return False
     
     def get_stickers(self):
@@ -800,3 +1042,82 @@ class CanvasWidget(tk.Frame):
         self.canvas.delete('border_image')
         # 强制更新
         self.canvas.update_idletasks()
+
+    def get_main_image_geometry(self):
+        """获取主图片的相对几何信息 (rel_x, rel_y, rel_w, rel_h)"""
+        if not self.main_image_id:
+            return None
+            
+        bbox = self.canvas.bbox(self.main_image_id)
+        if not bbox:
+            return None
+            
+        x1, y1, x2, y2 = bbox
+        
+        # 获取画布实际尺寸
+        canvas_w = self.canvas.winfo_width()
+        canvas_h = self.canvas.winfo_height()
+        
+        # 避免除以零
+        if canvas_w <= 0: canvas_w = self.width
+        if canvas_h <= 0: canvas_h = self.height
+        
+        # 计算相对坐标 (0.0 - 1.0)
+        rel_x = x1 / canvas_w
+        rel_y = y1 / canvas_h
+        rel_w = (x2 - x1) / canvas_w
+        rel_h = (y2 - y1) / canvas_h
+        
+        return (rel_x, rel_y, rel_w, rel_h)
+
+    def set_text_layer(self, text_layer):
+        """设置文字层并渲染到画布"""
+        # 清除旧的文字层
+        self.clear_text_layer()
+        
+        if not text_layer or not text_layer.content:
+            return
+        
+        # 渲染文字
+        from image_processor import TextLayer
+        rendered, x, y = text_layer.render(self.width, self.height, scale=1.0)
+        
+        if rendered:
+            # 转换为 PhotoImage
+            self._text_photo = ImageTk.PhotoImage(rendered)
+            self._text_id = self.canvas.create_image(
+                x, y, 
+                image=self._text_photo, 
+                anchor='nw',
+                tags=('text_layer',)
+            )
+            self._ensure_layer_order()
+    
+    def set_text_preview(self, config):
+        """设置文字预览 (实时)"""
+        if not config.get('content'):
+            self.clear_text_layer()
+            return
+        
+        from image_processor import TextLayer
+        
+        # 创建临时文字层
+        text_layer = TextLayer(
+            content=config.get('content', ''),
+            font_size=config.get('font_size', 48),
+            color=config.get('color', '#FFFFFF'),
+            font_family=config.get('font_family', 'pingfang'),
+            align=config.get('align', 'center'),
+            position=config.get('position', 'bottom'),
+            margin=config.get('margin', 20),
+            shadow=config.get('shadow'),
+            stroke=config.get('stroke'),
+        )
+        
+        self.set_text_layer(text_layer)
+    
+    def clear_text_layer(self):
+        """清除文字层"""
+        self.canvas.delete('text_layer')
+        self._text_photo = None
+        self._text_id = None
