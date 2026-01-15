@@ -44,6 +44,9 @@ class CanvasWidget(tk.Frame):
         self.handle_type = None    # 当前拖拽的缩放柄类型 ('nw', 'ne', etc.)
         self.handles = {}          # 存储句柄 ID -> 类型
         
+        # 文字交互回调
+        self.on_text_interaction = None
+        
         # 绑定鼠标事件
         self.canvas.bind('<Button-1>', self.on_canvas_click)
         self.canvas.bind('<B1-Motion>', self.on_canvas_drag)
@@ -901,18 +904,26 @@ class CanvasWidget(tk.Frame):
             elif 'text_layer' in tags:
                 # 文字层缩放：通过回调通知主窗口调整字号
                 if hasattr(self, 'on_text_interaction') and self.on_text_interaction:
-                    # 简单的缩放因子计算
-                    if 's' in self.handle_type or 'e' in self.handle_type:
-                        delta = max(dx, dy)
-                    else:
-                        delta = -max(-dx, -dy)
+                    # 计算缩放因子
+                    factor = 1.0
+                    if 'se' in self.handle_type:
+                        factor = 1.0 + max(dx, dy) / 150.0
+                    elif 'sw' in self.handle_type:
+                        factor = 1.0 + max(-dx, dy) / 150.0
+                    elif 'ne' in self.handle_type:
+                        factor = 1.0 + max(dx, -dy) / 150.0
+                    elif 'nw' in self.handle_type:
+                        factor = 1.0 + max(-dx, -dy) / 150.0
+                    elif 'e' in self.handle_type or 'w' in self.handle_type:
+                        factor = 1.0 + dx / 150.0
+                    elif 's' in self.handle_type or 'n' in self.handle_type:
+                        factor = 1.0 + dy / 150.0
                     
-                    # 避免过快
-                    if abs(delta) > 5:
-                        factor = 1.0 + (delta / 200.0)
+                    factor = max(0.5, min(2.0, factor))
+                    
+                    # 避免过快缩放
+                    if abs(factor - 1.0) > 0.02:
                         self.on_text_interaction('scale', factor=factor)
-                        
-                        # 重置 drag start 防止累积过快
                         self.drag_start_x = event.x
                         self.drag_start_y = event.y
                 return
