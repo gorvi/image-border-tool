@@ -1693,9 +1693,11 @@ class MainWindow(tk.Tk):
         # 获取字体键名 (反向查找)
         font_name = self.font_family_var.get() if hasattr(self, 'font_family_var') else '苹方 (默认)'
         font_family = 'pingfang'
+        found = False
         for k, v in TextLayer.FONT_NAMES.items():
             if v == font_name:
                 font_family = k
+                found = True
                 break
         
         # 检查是否需要保留自定义位置

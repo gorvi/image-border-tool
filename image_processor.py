@@ -214,6 +214,51 @@ class TextLayer:
         'weibei': '魏碑'
     }
 
+    # 字体文件名映射 (用于动态搜索)
+    FONT_FILENAMES = {
+        'pingfang': ['PingFang.ttc', 'PingFang SC.ttc', 'PingFangUI.ttc'],
+        'kaiti': ['Kaiti.ttc', 'STKaiti.ttc', 'STKaiti.ttf', 'simkai.ttf'],
+        'yuanti': ['Yuanti.ttc', 'STYuanti.ttc', 'STYuanti.ttf', 'simyou.ttf'],
+        'songti': ['Songti.ttc', 'STSongti.ttc', 'simsun.ttc'],
+        'heiti': ['STHeiti Light.ttc', 'STHeiti', 'simhei.ttf'],
+        'xingkai': ['STXingkai.ttc', 'STXingkai.ttf', 'STXINGKA.TTF'],
+        'weibei': ['WeibeiSC-Bold.otf']
+    }
+    
+    _font_search_cache = {}
+
+    @classmethod
+    def _find_font_path(cls, family):
+        """动态搜索系统字体路径"""
+        if family in cls._font_search_cache:
+            return cls._font_search_cache[family]
+            
+        filenames = cls.FONT_FILENAMES.get(family, [])
+        if not filenames:
+            return None
+            
+        # 需要搜索的根目录 (macOS AssetsV2 是重点)
+        search_roots = [
+            '/System/Library/AssetsV2', 
+            '/System/Library/PrivateFrameworks',
+            '/System/Library/Fonts'
+        ]
+        
+        print(f"[DEBUG] Searching for font family '{family}' in system...")
+        for root_dir in search_roots:
+            if not os.path.exists(root_dir):
+                continue
+            for root, dirs, files in os.walk(root_dir):
+                for file in files:
+                    if file in filenames:
+                        full_path = os.path.join(root, file)
+                        print(f"[DEBUG] Found font: {full_path}")
+                        cls._font_search_cache[family] = full_path
+                        return full_path
+                        
+        cls._font_search_cache[family] = None
+        return None
+
     def __init__(self, content, font_size=48, color='#FFFFFF', 
                  font_family='pingfang', align='left', position='top',
                  margin=20, shadow=None, stroke=None, highlight=None):
@@ -260,6 +305,12 @@ class TextLayer:
             if os.path.exists(path):
                 font_path = path
                 break
+        
+        # 如果静态路径未找到，尝试动态搜索
+        if not font_path:
+            font_path = self._find_font_path(self.font_family)
+        
+        # print(f"[DEBUG] _get_font: family='{self.font_family}', resolved_path='{font_path}'")
         
         # 尝试加载字体
         if font_path:
