@@ -2179,7 +2179,7 @@ class MainWindow(tk.Tk):
                       bg=COLORS['panel_bg'], fg=COLORS['text_primary'], font=('SF Pro Text', 10),
                       selectcolor=COLORS['accent'], activebackground=COLORS['panel_bg'])
         text_dir_check.pack(anchor='w')
-        Tooltip(text_dir_check, '从指定目录读取与图片同名的 .txt 文件作为文字内容')
+        Tooltip(text_dir_check, '选择一个 .txt 文件，其内容将应用于所有批量处理的图片')
         
         # 文字目录选择
         text_dir_select_frame = tk.Frame(text_dir_frame, bg=COLORS['panel_bg'])
