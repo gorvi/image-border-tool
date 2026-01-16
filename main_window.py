@@ -1474,12 +1474,7 @@ class MainWindow(tk.Tk):
                           highlightbackground=COLORS['separator'], cursor='hand2')
             hc.pack(side=tk.LEFT, padx=1)
             hc.bind('<Button-1>', lambda e, color=c: self.set_highlight_color(color))
-        
-        # 清除文字按钮
-        clear_btn = tk.Label(text_actions_frame, text='🗑️', font=('SF Pro Text', 12),
-                            bg=COLORS['bg_tertiary'], fg=COLORS['danger'], padx=4, cursor='hand2')
-        clear_btn.pack(side=tk.RIGHT)
-        clear_btn.bind('<Button-1>', lambda e: self.clear_text_layers())
+
         
         # 存储自动检测的关键词 (内部使用)
         self._auto_keywords = []
@@ -1701,6 +1696,16 @@ class MainWindow(tk.Tk):
                           highlightbackground=COLORS['separator'], cursor='hand2')
             sc.pack(side=tk.LEFT, padx=1)
             sc.bind('<Button-1>', lambda e, color=c: self._set_stroke_color(color))
+        
+        # 清除文字按钮 (放在面板底部，避免误点)
+        clear_frame = tk.Frame(text_frame, bg=COLORS['panel_bg'])
+        clear_frame.pack(fill=tk.X, padx=12, pady=(16, 4))
+        
+        clear_btn = tk.Label(clear_frame, text='🗑️ 清除文字', font=('SF Pro Text', 10),
+                            bg=COLORS['bg_tertiary'], fg=COLORS['danger'], 
+                            padx=10, pady=4, cursor='hand2')
+        clear_btn.pack(side=tk.RIGHT)
+        clear_btn.bind('<Button-1>', lambda e: self.clear_text_layers())
 
     
     def _on_text_preview(self):
@@ -2041,6 +2046,12 @@ class MainWindow(tk.Tk):
         self.text_layers = []
         if hasattr(self, 'canvas_widget'):
             self.canvas_widget.clear_text_layer()
+        # 清空输入框
+        if hasattr(self, 'text_content_entry'):
+            self.text_content_entry.delete('1.0', tk.END)
+        # 更新字符计数
+        if hasattr(self, 'char_count_label'):
+            self.char_count_label.config(text='0 / 150', fg=COLORS['text_secondary'])
         self.show_toast('文字已清除')
     
     def create_batch_tab(self, parent):
