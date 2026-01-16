@@ -617,7 +617,8 @@ class TextLayer:
         if self.position == 'top':
             y = margin
         elif self.position == 'bottom':
-            y = canvas_height - text_height - margin
+            # 底部额外留出空间，避免太贴边
+            y = canvas_height - text_height - margin * 2
         else:  # center
             y = (canvas_height - text_height) // 2
         
