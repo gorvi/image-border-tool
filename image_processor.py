@@ -206,17 +206,14 @@ class TextLayer:
         'weibei': ['/Library/Fonts/WeibeiSC-Bold.otf', '/System/Library/Fonts/Supplemental/WeibeiSC-Bold.otf']
     }
     
-    # 字体友好名称映射 (用于UI显示)
+    # 字体友好名称映射 (用于UI显示) - 只保留中英文兼容字体
     FONT_NAMES = {
         'pingfang': '苹方 (默认)',
-        'sf_pro': 'SF Pro (英文)',
         'hiragino': '冬青黑体',
         'heiti': 'ST黑体',
         'songti': 'ST宋体',
         'kaiti': 'ST楷体',
         'yuanti': 'ST圆体',
-        'xingkai': 'ST行楷',
-        'weibei': '魏碑'
     }
 
     # 字体文件名映射 (用于动态搜索)
