@@ -1411,6 +1411,35 @@ class MainWindow(tk.Tk):
                                          bg=COLORS['panel_bg'], fg=COLORS['text_secondary'])
         self.char_count_label.pack(anchor='e', padx=4)
         
+        # 关键词高亮 + 清除文字 (移到文字框下方)
+        text_actions_frame = tk.Frame(text_entry_container, bg=COLORS['panel_bg'])
+        text_actions_frame.pack(fill=tk.X, pady=(4, 0))
+        
+        self.highlight_enabled_var = tk.BooleanVar(value=True)
+        tk.Checkbutton(text_actions_frame, text='🔍 自动高亮', variable=self.highlight_enabled_var,
+                      bg=COLORS['panel_bg'], fg=COLORS['text_primary'],
+                      selectcolor=COLORS['accent'], activebackground=COLORS['panel_bg'],
+                      font=('SF Pro Text', 9),
+                      command=self._on_highlight_toggle).pack(side=tk.LEFT)
+        
+        # 高亮颜色 (紧凑版)
+        self.highlight_color_var = tk.StringVar(value='#FFB7B2')
+        highlight_colors = ['#FFB7B2', '#FFDAC1', '#E2F0CB', '#B5EAD7', '#C7CEEA']
+        for c in highlight_colors:
+            hc = tk.Canvas(text_actions_frame, width=14, height=14, bg=c, highlightthickness=1,
+                          highlightbackground=COLORS['separator'], cursor='hand2')
+            hc.pack(side=tk.LEFT, padx=1)
+            hc.bind('<Button-1>', lambda e, color=c: self.set_highlight_color(color))
+        
+        # 清除文字按钮
+        clear_btn = tk.Label(text_actions_frame, text='🗑️', font=('SF Pro Text', 12),
+                            bg=COLORS['bg_tertiary'], fg=COLORS['danger'], padx=4, cursor='hand2')
+        clear_btn.pack(side=tk.RIGHT)
+        clear_btn.bind('<Button-1>', lambda e: self.clear_text_layers())
+        
+        # 存储自动检测的关键词 (内部使用)
+        self._auto_keywords = []
+        
         # 2. 字体设置
         font_frame = tk.Frame(text_frame, bg=COLORS['panel_bg'])
         font_frame.pack(fill=tk.X, padx=12, pady=4)
@@ -1586,90 +1615,49 @@ class MainWindow(tk.Tk):
                                command=lambda v: self.update_text_preview())
         margin_scale.pack(side=tk.LEFT, padx=(8, 0))
         
-        # 8. 阴影设置
-        shadow_frame = tk.LabelFrame(text_frame, text='阴影', font=('SF Pro Text', 10),
-                                     bg=COLORS['panel_bg'], fg=COLORS['text_secondary'],
-                                     padx=8, pady=4)
-        shadow_frame.pack(fill=tk.X, padx=12, pady=8)
+        # 8. 阴影设置 (紧凑布局)
+        shadow_frame = tk.Frame(text_frame, bg=COLORS['panel_bg'])
+        shadow_frame.pack(fill=tk.X, padx=12, pady=2)
         
         self.text_shadow_var = tk.BooleanVar(value=False)
-        tk.Checkbutton(shadow_frame, text='启用阴影', variable=self.text_shadow_var,
-                      bg=COLORS['panel_bg'], fg=COLORS['text_primary'],
-                      selectcolor=COLORS['accent'], activebackground=COLORS['panel_bg'],
-                      command=self.update_text_preview).pack(anchor='w')
-        
-        # 9. 描边设置
-        stroke_frame = tk.LabelFrame(text_frame, text='描边', font=('SF Pro Text', 10),
-                                     bg=COLORS['panel_bg'], fg=COLORS['text_secondary'],
-                                     padx=8, pady=4)
-        stroke_frame.pack(fill=tk.X, padx=12, pady=8)
-        
-        self.text_stroke_var = tk.BooleanVar(value=False)
-        tk.Checkbutton(stroke_frame, text='启用描边', variable=self.text_stroke_var,
-                      bg=COLORS['panel_bg'], fg=COLORS['text_primary'],
-                      selectcolor=COLORS['accent'], activebackground=COLORS['panel_bg'],
-                      command=self.update_text_preview).pack(anchor='w')
-        
-        stroke_width_frame = tk.Frame(stroke_frame, bg=COLORS['panel_bg'])
-        stroke_width_frame.pack(fill=tk.X)
-        
-        tk.Label(stroke_width_frame, text='宽度:', font=('SF Pro Text', 9),
-                 bg=COLORS['panel_bg'], fg=COLORS['text_secondary']).pack(side=tk.LEFT)
-        
-        self.stroke_width_var = tk.IntVar(value=2)
-        stroke_scale = tk.Scale(stroke_width_frame, from_=1, to=10, orient=tk.HORIZONTAL,
-                               variable=self.stroke_width_var, bg=COLORS['panel_bg'],
-                               fg=COLORS['text_primary'], highlightthickness=0,
-                               troughcolor=COLORS['bg_secondary'], length=80,
-                               command=lambda v: self.update_text_preview())
-        stroke_scale.pack(side=tk.LEFT, padx=(4, 0))
-        
-        # 描边颜色
-        stroke_color_frame = tk.Frame(stroke_frame, bg=COLORS['panel_bg'])
-        stroke_color_frame.pack(fill=tk.X, pady=(4, 0))
-        
-        tk.Label(stroke_color_frame, text='颜色:', font=('SF Pro Text', 9),
-                 bg=COLORS['panel_bg'], fg=COLORS['text_secondary']).pack(side=tk.LEFT)
-        
-        self.stroke_color_var = tk.StringVar(value='#000000')
-        stroke_colors = ['#000000', '#FFFFFF', '#FF2D55', '#007AFF', '#34C759', '#FF9500']
-        for c in stroke_colors:
-            sc = tk.Canvas(stroke_color_frame, width=16, height=16, bg=c, highlightthickness=1,
-                          highlightbackground=COLORS['separator'], cursor='hand2')
-            sc.pack(side=tk.LEFT, padx=1)
-            sc.bind('<Button-1>', lambda e, color=c: self._set_stroke_color(color))
-        
-        # 11. 关键字高亮设置 (简化版)
-        highlight_frame = tk.Frame(text_frame, bg=COLORS['panel_bg'])
-        highlight_frame.pack(fill=tk.X, padx=12, pady=8)
-        
-        self.highlight_enabled_var = tk.BooleanVar(value=True)
-        tk.Checkbutton(highlight_frame, text='🔍 自动标记关键词', variable=self.highlight_enabled_var,
+        tk.Checkbutton(shadow_frame, text='阴影', variable=self.text_shadow_var,
                       bg=COLORS['panel_bg'], fg=COLORS['text_primary'],
                       selectcolor=COLORS['accent'], activebackground=COLORS['panel_bg'],
                       font=('SF Pro Text', 10),
-                      command=self._on_highlight_toggle).pack(side=tk.LEFT)
+                      command=self.update_text_preview).pack(side=tk.LEFT)
         
-        # 高亮颜色
-        self.highlight_color_var = tk.StringVar(value='#FFB7B2')
-        highlight_colors = ['#FFB7B2', '#FFDAC1', '#E2F0CB', '#B5EAD7', '#C7CEEA', '#FF6EC7', '#FFD60A']
-        for c in highlight_colors:
-            hc = tk.Canvas(highlight_frame, width=16, height=16, bg=c, highlightthickness=1,
+        # 9. 描边设置 (紧凑布局，同一行)
+        self.text_stroke_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(shadow_frame, text='描边', variable=self.text_stroke_var,
+                      bg=COLORS['panel_bg'], fg=COLORS['text_primary'],
+                      selectcolor=COLORS['accent'], activebackground=COLORS['panel_bg'],
+                      font=('SF Pro Text', 10),
+                      command=self.update_text_preview).pack(side=tk.LEFT, padx=(12, 0))
+        
+        # 描边宽度滑块
+        stroke_frame = tk.Frame(text_frame, bg=COLORS['panel_bg'])
+        stroke_frame.pack(fill=tk.X, padx=12, pady=2)
+        
+        tk.Label(stroke_frame, text='宽度:', font=('SF Pro Text', 9),
+                 bg=COLORS['panel_bg'], fg=COLORS['text_secondary']).pack(side=tk.LEFT)
+        
+        self.stroke_width_var = tk.IntVar(value=2)
+        stroke_scale = tk.Scale(stroke_frame, from_=1, to=10, orient=tk.HORIZONTAL,
+                               variable=self.stroke_width_var, bg=COLORS['panel_bg'],
+                               fg=COLORS['text_primary'], highlightthickness=0,
+                               troughcolor=COLORS['bg_secondary'], length=60,
+                               command=lambda v: self.update_text_preview())
+        stroke_scale.pack(side=tk.LEFT, padx=(4, 0))
+        
+        # 描边颜色 (同一行，9个颜色)
+        self.stroke_color_var = tk.StringVar(value='#000000')
+        stroke_colors = ['#000000', '#FFFFFF', '#FF2D55', '#FF9500', '#FFCC00', '#34C759', '#007AFF', '#5856D6', '#AF52DE']
+        for c in stroke_colors:
+            sc = tk.Canvas(stroke_frame, width=14, height=14, bg=c, highlightthickness=1,
                           highlightbackground=COLORS['separator'], cursor='hand2')
-            hc.pack(side=tk.LEFT, padx=1)
-            hc.bind('<Button-1>', lambda e, color=c: self.set_highlight_color(color))
-        
-        # 存储自动检测的关键词 (内部使用)
-        self._auto_keywords = []
-        
-        # 12. 清除文字按钮
-        btn_frame = tk.Frame(text_frame, bg=COLORS['panel_bg'])
-        btn_frame.pack(fill=tk.X, padx=12, pady=8)
-        
-        clear_btn = tk.Label(btn_frame, text='🗑️ 清除文字', font=('SF Pro Text', 9),
-                            bg=COLORS['bg_tertiary'], fg=COLORS['danger'], pady=4, padx=8, cursor='hand2')
-        clear_btn.pack(anchor='w', pady=2)
-        clear_btn.bind('<Button-1>', lambda e: self.clear_text_layers())
+            sc.pack(side=tk.LEFT, padx=1)
+            sc.bind('<Button-1>', lambda e, color=c: self._set_stroke_color(color))
+
     
     def _on_text_preview(self):
         """实时预览：每次按键时更新画布（不触发关键词检测）"""
