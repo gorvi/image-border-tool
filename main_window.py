@@ -1467,7 +1467,7 @@ class MainWindow(tk.Tk):
         # 基础色
         basic_frame = tk.Frame(color_section, bg=COLORS['panel_bg'])
         basic_frame.pack(anchor='w', pady=2)
-        basic_colors = ['#333333', '#000000', '#FFFFFF', '#FF2D55', '#FF9500', '#34C759', '#007AFF']
+        basic_colors = ['#333333', '#000000', '#FFFFFF', '#FF2D55', '#FF9500', '#FFCC00', '#34C759', '#007AFF', '#5856D6']
         for c in basic_colors:
             cb = tk.Canvas(basic_frame, width=18, height=18, bg=c, highlightthickness=1,
                           highlightbackground=COLORS['separator'], cursor='hand2')
@@ -1508,7 +1508,7 @@ class MainWindow(tk.Tk):
         custom_btn.pack(side=tk.LEFT, padx=4)
         custom_btn.bind('<Button-1>', lambda e: self.open_text_color_picker())
         
-        # 5. 对齐设置
+        # 5. 对齐设置 (图标按钮)
         align_frame = tk.Frame(text_frame, bg=COLORS['panel_bg'])
         align_frame.pack(fill=tk.X, padx=12, pady=4)
         
@@ -1516,14 +1516,16 @@ class MainWindow(tk.Tk):
                  bg=COLORS['panel_bg'], fg=COLORS['text_secondary']).pack(side=tk.LEFT)
         
         self.text_align_var = tk.StringVar(value='left')
-        for name, val in [('左', 'left'), ('中', 'center'), ('右', 'right')]:
-            rb = tk.Radiobutton(align_frame, text=name, variable=self.text_align_var, value=val,
-                               bg=COLORS['panel_bg'], fg=COLORS['text_primary'],
-                               selectcolor=COLORS['accent'], activebackground=COLORS['panel_bg'],
-                               command=self.update_text_preview)
-            rb.pack(side=tk.LEFT, padx=4)
+        # 使用图标: ☰ (左对齐), ☰ (居中), ☰ (右对齐)
+        align_icons = [('⬚≡', 'left'), ('≡', 'center'), ('≡⬚', 'right')]
+        for icon, val in align_icons:
+            btn = tk.Label(align_frame, text=icon, font=('SF Pro Text', 14),
+                          bg=COLORS['bg_tertiary'], fg=COLORS['text_primary'],
+                          padx=8, pady=2, cursor='hand2')
+            btn.pack(side=tk.LEFT, padx=2)
+            btn.bind('<Button-1>', lambda e, v=val: self._set_align(v))
         
-        # 6. 位置设置
+        # 6. 位置设置 (图标按钮)
         pos_frame = tk.Frame(text_frame, bg=COLORS['panel_bg'])
         pos_frame.pack(fill=tk.X, padx=12, pady=4)
         
@@ -1531,12 +1533,38 @@ class MainWindow(tk.Tk):
                  bg=COLORS['panel_bg'], fg=COLORS['text_secondary']).pack(side=tk.LEFT)
         
         self.text_position_var = tk.StringVar(value='top')
-        for name, val in [('顶部', 'top'), ('居中', 'center'), ('底部', 'bottom')]:
-            rb = tk.Radiobutton(pos_frame, text=name, variable=self.text_position_var, value=val,
-                               bg=COLORS['panel_bg'], fg=COLORS['text_primary'],
-                               selectcolor=COLORS['accent'], activebackground=COLORS['panel_bg'],
-                               command=self.update_text_preview)
-            rb.pack(side=tk.LEFT, padx=4)
+        # 使用图标: ⬆ (顶部), ⬌ (居中), ⬇ (底部)
+        pos_icons = [('⬆', 'top'), ('⬌', 'center'), ('⬇', 'bottom')]
+        for icon, val in pos_icons:
+            btn = tk.Label(pos_frame, text=icon, font=('SF Pro Text', 14),
+                          bg=COLORS['bg_tertiary'], fg=COLORS['text_primary'],
+                          padx=8, pady=2, cursor='hand2')
+            btn.pack(side=tk.LEFT, padx=2)
+            btn.bind('<Button-1>', lambda e, v=val: self._set_position(v))
+        
+        # 6.1 文字样式 (加粗/斜体/下划线)
+        style_frame = tk.Frame(text_frame, bg=COLORS['panel_bg'])
+        style_frame.pack(fill=tk.X, padx=12, pady=4)
+        
+        tk.Label(style_frame, text='样式:', font=('SF Pro Text', 10),
+                 bg=COLORS['panel_bg'], fg=COLORS['text_secondary']).pack(side=tk.LEFT)
+        
+        self.text_bold_var = tk.BooleanVar(value=False)
+        self.text_italic_var = tk.BooleanVar(value=False)
+        self.text_underline_var = tk.BooleanVar(value=False)
+        
+        # B = Bold, I = Italic, U = Underline
+        style_btns = [('B', self.text_bold_var, 'bold'), 
+                      ('I', self.text_italic_var, 'italic'), 
+                      ('U̲', self.text_underline_var, 'underline')]
+        for icon, var, name in style_btns:
+            btn = tk.Checkbutton(style_frame, text=icon, variable=var,
+                                font=('SF Pro Text', 12, 'bold' if name == 'bold' else 'italic' if name == 'italic' else 'normal'),
+                                bg=COLORS['bg_tertiary'], fg=COLORS['text_primary'],
+                                selectcolor=COLORS['accent'], activebackground=COLORS['bg_tertiary'],
+                                indicatoron=False, padx=8, pady=2,
+                                command=self._auto_apply_text)
+            btn.pack(side=tk.LEFT, padx=2)
         
         # 7. 边距设置
         margin_frame = tk.Frame(text_frame, bg=COLORS['panel_bg'])
@@ -1591,6 +1619,21 @@ class MainWindow(tk.Tk):
                                command=lambda v: self.update_text_preview())
         stroke_scale.pack(side=tk.LEFT, padx=(4, 0))
         
+        # 描边颜色
+        stroke_color_frame = tk.Frame(stroke_frame, bg=COLORS['panel_bg'])
+        stroke_color_frame.pack(fill=tk.X, pady=(4, 0))
+        
+        tk.Label(stroke_color_frame, text='颜色:', font=('SF Pro Text', 9),
+                 bg=COLORS['panel_bg'], fg=COLORS['text_secondary']).pack(side=tk.LEFT)
+        
+        self.stroke_color_var = tk.StringVar(value='#000000')
+        stroke_colors = ['#000000', '#FFFFFF', '#FF2D55', '#007AFF', '#34C759', '#FF9500']
+        for c in stroke_colors:
+            sc = tk.Canvas(stroke_color_frame, width=16, height=16, bg=c, highlightthickness=1,
+                          highlightbackground=COLORS['separator'], cursor='hand2')
+            sc.pack(side=tk.LEFT, padx=1)
+            sc.bind('<Button-1>', lambda e, color=c: self._set_stroke_color(color))
+        
         # 11. 关键字高亮设置 (简化版)
         highlight_frame = tk.Frame(text_frame, bg=COLORS['panel_bg'])
         highlight_frame.pack(fill=tk.X, padx=12, pady=8)
@@ -1625,6 +1668,21 @@ class MainWindow(tk.Tk):
     
     def _on_text_preview(self):
         """实时预览：每次按键时更新画布（不触发关键词检测）"""
+        self._auto_apply_text()
+    
+    def _set_align(self, val):
+        """设置对齐方式"""
+        self.text_align_var.set(val)
+        self._auto_apply_text()
+    
+    def _set_position(self, val):
+        """设置位置"""
+        self.text_position_var.set(val)
+        self._auto_apply_text()
+    
+    def _set_stroke_color(self, color):
+        """设置描边颜色"""
+        self.stroke_color_var.set(color)
         self._auto_apply_text()
     
     def _on_detect_keywords(self):
@@ -1715,7 +1773,7 @@ class MainWindow(tk.Tk):
             },
             stroke={
                 'enabled': self.text_stroke_var.get() if hasattr(self, 'text_stroke_var') else False,
-                'color': '#000000',
+                'color': self.stroke_color_var.get() if hasattr(self, 'stroke_color_var') else '#000000',
                 'width': self.stroke_width_var.get() if hasattr(self, 'stroke_width_var') else 2
             },
             highlight={
