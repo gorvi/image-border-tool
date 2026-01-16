@@ -1406,6 +1406,11 @@ class MainWindow(tk.Tk):
         
         resize_handle.bind('<B1-Motion>', on_resize_drag)
         
+        # 字符计数器
+        self.char_count_label = tk.Label(text_entry_container, text='0 / 150', font=('SF Pro Text', 9),
+                                         bg=COLORS['panel_bg'], fg=COLORS['text_secondary'])
+        self.char_count_label.pack(anchor='e', padx=4)
+        
         # 2. 字体设置
         font_frame = tk.Frame(text_frame, bg=COLORS['panel_bg'])
         font_frame.pack(fill=tk.X, padx=12, pady=4)
@@ -1668,6 +1673,23 @@ class MainWindow(tk.Tk):
     
     def _on_text_preview(self):
         """实时预览：每次按键时更新画布（不触发关键词检测）"""
+        # 更新字符计数
+        if hasattr(self, 'text_content_entry') and hasattr(self, 'char_count_label'):
+            content = self.text_content_entry.get('1.0', 'end-1c')
+            char_count = len(content)
+            max_chars = 150
+            
+            # 限制最大字符数
+            if char_count > max_chars:
+                # 截断文本
+                self.text_content_entry.delete('1.0', tk.END)
+                self.text_content_entry.insert('1.0', content[:max_chars])
+                char_count = max_chars
+            
+            # 更新计数显示
+            color = COLORS['danger'] if char_count >= max_chars else COLORS['text_secondary']
+            self.char_count_label.config(text=f'{char_count} / {max_chars}', fg=color)
+        
         self._auto_apply_text()
     
     def _set_align(self, val):
