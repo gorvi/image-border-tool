@@ -1802,7 +1802,10 @@ class MainWindow(tk.Tk):
                 'enabled': self.highlight_enabled_var.get() if hasattr(self, 'highlight_enabled_var') else True,
                 'keywords': self._auto_keywords if hasattr(self, '_auto_keywords') else [],
                 'color': self.highlight_color_var.get() if hasattr(self, 'highlight_color_var') else '#FFB7B2'
-            }
+            },
+            bold=self.text_bold_var.get() if hasattr(self, 'text_bold_var') else False,
+            italic=self.text_italic_var.get() if hasattr(self, 'text_italic_var') else False,
+            underline=self.text_underline_var.get() if hasattr(self, 'text_underline_var') else False
         )
         
         # 恢复自定义位置坐标

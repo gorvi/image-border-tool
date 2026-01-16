@@ -263,7 +263,8 @@ class TextLayer:
 
     def __init__(self, content, font_size=48, color='#FFFFFF', 
                  font_family='pingfang', align='left', position='top',
-                 margin=20, shadow=None, stroke=None, highlight=None):
+                 margin=20, shadow=None, stroke=None, highlight=None,
+                 bold=False, italic=False, underline=False):
         """
         初始化文字层
         
@@ -278,6 +279,9 @@ class TextLayer:
             shadow: 阴影配置 {'enabled': True, 'color': '#000000', 'offset': (2,2), 'blur': 4}
             stroke: 描边配置 {'enabled': True, 'color': '#000000', 'width': 2}
             highlight: 高亮配置 {'enabled': True, 'keywords': ['word1','word2'], 'color': '#FFB7B2'}
+            bold: 加粗
+            italic: 斜体
+            underline: 下划线
         """
         self.content = content
         self.font_size = font_size
@@ -289,6 +293,9 @@ class TextLayer:
         self.shadow = shadow or {'enabled': False, 'color': '#000000', 'offset': (2, 2), 'blur': 4}
         self.stroke = stroke or {'enabled': False, 'color': '#000000', 'width': 2}
         self.highlight = highlight or {'enabled': False, 'keywords': [], 'color': '#FFB7B2'}
+        self.bold = bold
+        self.italic = italic
+        self.underline = underline
         
         # 相对坐标 (用于拖拽)
         self.rel_x = 0.5
@@ -547,15 +554,46 @@ class TextLayer:
                 sy = line_y + int(shadow_offset[1] * scale)
                 render_draw.text((sx, sy), line, font=font, fill=shadow_color)
             
-            # 2. 绘制描边
-            if self.stroke.get('enabled') and scaled_stroke_width > 0:
-                stroke_color = self.stroke.get('color', '#000000')
+            # 2. 绘制描边 (或加粗效果)
+            stroke_w = scaled_stroke_width if self.stroke.get('enabled') else 0
+            stroke_c = self.stroke.get('color', '#000000') if self.stroke.get('enabled') else self.color
+            
+            # 加粗：使用描边模拟（如果没有启用描边，则使用文字颜色描边）
+            if self.bold and stroke_w == 0:
+                stroke_w = max(1, int(scaled_font_size * 0.03))  # 粗度约3%
+                stroke_c = self.color
+            
+            if stroke_w > 0:
                 render_draw.text((line_x, line_y), line, font=font, 
-                               fill=self.color, stroke_width=scaled_stroke_width,
-                               stroke_fill=stroke_color)
+                               fill=self.color, stroke_width=stroke_w,
+                               stroke_fill=stroke_c)
             else:
                 # 3. 绘制文字
                 render_draw.text((line_x, line_y), line, font=font, fill=self.color)
+            
+            # 4. 下划线
+            if self.underline:
+                underline_y = line_y + line_heights[i] + 2
+                underline_h = max(2, int(scaled_font_size * 0.05))
+                render_draw.rectangle(
+                    [line_x, underline_y, line_x + line_widths[i], underline_y + underline_h],
+                    fill=self.color
+                )
+        # 5. 斜体效果 (使用仿射变换倾斜)
+        if self.italic:
+            from PIL import Image as PILImage
+            # 倾斜角度约 12 度
+            shear_factor = 0.2
+            new_width = render_width + int(render_height * shear_factor)
+            italic_img = PILImage.new('RGBA', (new_width, render_height), (0, 0, 0, 0))
+            # 使用仿射变换
+            render_img = render_img.transform(
+                (new_width, render_height),
+                PILImage.AFFINE,
+                (1, shear_factor, -render_height * shear_factor * 0.5, 0, 1, 0),
+                resample=PILImage.BICUBIC
+            )
+            render_width = new_width
         
         # 计算在画布上的位置
         x, y = self._calculate_position(canvas_width, canvas_height, 
