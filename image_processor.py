@@ -451,82 +451,88 @@ class TextLayer:
             
             line_y = draw_y + sum(line_heights[:i]) + line_spacing * i
             
-            # 0. 绘制关键字高亮下划线
+            # 0. 绘制关键字高亮下划线 (智能限制：每10个字符或每行最多1个高亮)
             if self.highlight.get('enabled') and self.highlight.get('keywords'):
                 highlight_color = self.highlight.get('color', '#FFB7B2')
                 underline_height = max(4, int(scaled_font_size * 0.15))  # 下划线高度
+                
+                # 记录已高亮的10字符段，避免同段内多次高亮
+                highlighted_segments = set()
                 
                 for keyword in self.highlight.get('keywords', []):
                     if not keyword:
                         continue
                     # 查找关键字在行中的位置
-                    start_idx = 0
-                    while True:
-                        idx = line.lower().find(keyword.lower(), start_idx)
-                        if idx == -1:
-                            break
+                    idx = line.lower().find(keyword.lower())
+                    if idx == -1:
+                        continue
+                    
+                    # 计算该关键词所属的10字符段
+                    segment_id = idx // 10
+                    if segment_id in highlighted_segments:
+                        continue  # 该段已有高亮，跳过
+                    
+                    highlighted_segments.add(segment_id)
+                    
+                    # 计算关键字的x位置和宽度
+                    prefix = line[:idx]
+                    keyword_text = line[idx:idx+len(keyword)]
+                    
+                    prefix_bbox = temp_draw.textbbox((0, 0), prefix, font=font) if prefix else (0, 0, 0, 0)
+                    keyword_bbox = temp_draw.textbbox((0, 0), keyword_text, font=font)
+                    
+                    kw_x = line_x + (prefix_bbox[2] - prefix_bbox[0])
+                    kw_width = keyword_bbox[2] - keyword_bbox[0]
+                    kw_y = line_y + line_heights[i] - underline_height  # 在文字底部
+                    
+                    # 绘制随机样式高亮
+                    style_type = random.choice(['underline', 'wavy', 'background', 'marker'])
+                    base_color = highlight_color
+                    
+                    # 解析颜色 (如果需要处理透明度)
+                    if base_color.startswith('#'):
+                        rgb = tuple(int(base_color.lstrip('#')[j:j+2], 16) for j in (0, 2, 4))
+                    else:
+                        rgb = (255, 183, 178) # Default pink
                         
-                        # 计算关键字的x位置和宽度
-                        prefix = line[:idx]
-                        keyword_text = line[idx:idx+len(keyword)]
+                    if style_type == 'underline':
+                        # 1. 经典下划线 (加一点手绘感的偏移)
+                        h_h = max(3, int(scaled_font_size * 0.1))
+                        h_y = kw_y + underline_height - h_h
+                        render_draw.rectangle(
+                            [kw_x, h_y, kw_x + kw_width, h_y + h_h],
+                            fill=rgb + (255,)
+                        )
                         
-                        prefix_bbox = temp_draw.textbbox((0, 0), prefix, font=font) if prefix else (0, 0, 0, 0)
-                        keyword_bbox = temp_draw.textbbox((0, 0), keyword_text, font=font)
+                    elif style_type == 'wavy':
+                        # 2. 波浪线
+                        wave_amp = max(2, int(scaled_font_size * 0.08))
+                        wave_freq = 0.3
+                        points = []
+                        steps = int(kw_width)
+                        start_y = kw_y + underline_height - wave_amp
+                        for sx in range(0, steps, 2):
+                            # y = A * sin(wx)
+                            dy = wave_amp * math.sin(sx * wave_freq)
+                            points.append((kw_x + sx, start_y + dy))
                         
-                        kw_x = line_x + (prefix_bbox[2] - prefix_bbox[0])
-                        kw_width = keyword_bbox[2] - keyword_bbox[0]
-                        kw_y = line_y + line_heights[i] - underline_height  # 在文字底部
-                        
-                        # 绘制随机样式高亮
-                        style_type = random.choice(['underline', 'wavy', 'background', 'marker'])
-                        base_color = highlight_color
-                        
-                        # 解析颜色 (如果需要处理透明度)
-                        if base_color.startswith('#'):
-                            rgb = tuple(int(base_color.lstrip('#')[i:i+2], 16) for i in (0, 2, 4))
-                        else:
-                            rgb = (255, 183, 178) # Default pink
+                        if len(points) > 1:
+                            render_draw.line(points, fill=rgb + (220,), width=max(2, int(scaled_font_size * 0.05)))
                             
-                        if style_type == 'underline':
-                            # 1. 经典下划线 (加一点手绘感的偏移)
-                            h_h = max(3, int(scaled_font_size * 0.1))
-                            h_y = kw_y + underline_height - h_h
-                            render_draw.rectangle(
-                                [kw_x, h_y, kw_x + kw_width, h_y + h_h],
-                                fill=rgb + (255,)
-                            )
-                            
-                        elif style_type == 'wavy':
-                            # 2. 波浪线
-                            wave_amp = max(2, int(scaled_font_size * 0.08))
-                            wave_freq = 0.3
-                            points = []
-                            steps = int(kw_width)
-                            start_y = kw_y + underline_height - wave_amp
-                            for sx in range(0, steps, 2):
-                                # y = A * sin(wx)
-                                dy = wave_amp * math.sin(sx * wave_freq)
-                                points.append((kw_x + sx, start_y + dy))
-                            
-                            if len(points) > 1:
-                                render_draw.line(points, fill=rgb + (220,), width=max(2, int(scaled_font_size * 0.05)))
-                                
-                        elif style_type == 'background':
-                            # 3. 圆角矩形背景 (半透明)
-                            pad = int(scaled_font_size * 0.1)
-                            bg_rect = [kw_x - pad, line_y, kw_x + kw_width + pad, line_y + line_heights[i]]
-                            render_draw.rounded_rectangle(bg_rect, radius=pad, fill=rgb + (100,))
-                            
-                        elif style_type == 'marker':
-                            # 4. 马克笔涂抹效果 (底部2/3高度，半透明)
-                            marker_h = int(line_heights[i] * 0.6)
-                            marker_y = line_y + line_heights[i] - marker_h
-                            render_draw.rectangle(
-                                [kw_x, marker_y, kw_x + kw_width, marker_y + marker_h],
-                                fill=rgb + (140,)
-                            )
+                    elif style_type == 'background':
+                        # 3. 圆角矩形背景 (半透明)
+                        pad = int(scaled_font_size * 0.1)
+                        bg_rect = [kw_x - pad, line_y, kw_x + kw_width + pad, line_y + line_heights[i]]
+                        render_draw.rounded_rectangle(bg_rect, radius=pad, fill=rgb + (100,))
                         
-                        start_idx = idx + len(keyword)
+                    elif style_type == 'marker':
+                        # 4. 马克笔涂抹效果 (底部2/3高度，半透明)
+                        marker_h = int(line_heights[i] * 0.6)
+                        marker_y = line_y + line_heights[i] - marker_h
+                        render_draw.rectangle(
+                            [kw_x, marker_y, kw_x + kw_width, marker_y + marker_h],
+                            fill=rgb + (140,)
+                        )
             
             # 1. 绘制阴影
             if self.shadow.get('enabled'):

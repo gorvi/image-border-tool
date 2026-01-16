@@ -1381,7 +1381,11 @@ class MainWindow(tk.Tk):
                                           wrap=tk.WORD, highlightthickness=1, 
                                           highlightbackground=COLORS['separator'])
         self.text_content_entry.pack(side=tk.TOP, anchor='w')
-        self.text_content_entry.bind('<KeyRelease>', lambda e: self._on_text_input())
+        # 实时预览：每次按键更新画布
+        self.text_content_entry.bind('<KeyRelease>', lambda e: self._on_text_preview())
+        # 高亮检测：仅在换行或移出时触发
+        self.text_content_entry.bind('<Return>', lambda e: self._on_detect_keywords())
+        self.text_content_entry.bind('<FocusOut>', lambda e: self._on_detect_keywords())
         self._keyword_detect_job = None  # 用于防抖
         
         # 调整大小的手柄
@@ -1619,25 +1623,13 @@ class MainWindow(tk.Tk):
         clear_btn.pack(anchor='w', pady=2)
         clear_btn.bind('<Button-1>', lambda e: self.clear_text_layers())
     
-    def _on_text_input(self):
-        """文字内容输入时触发 - 带防抖的自动关键词检测"""
-        content = self.text_content_entry.get('1.0', 'end-1c').strip() if hasattr(self, 'text_content_entry') else ''
-        
-        # 检查内容是否变化
-        last_content = getattr(self, '_last_text_content', '')
-        if content != last_content:
-            self._last_text_content = content
-            
-            # 取消之前的延迟任务
-            if self._keyword_detect_job:
-                self.after_cancel(self._keyword_detect_job)
-            
-            # 延迟 800ms 后自动检测关键词 (防抖)
-            self._keyword_detect_job = self.after(800, self._auto_detect_silent)
-        else:
-            # 内容没变，只更新样式
-            self._auto_apply_text()
-        self._keyword_detect_job = self.after(800, self._auto_detect_silent)
+    def _on_text_preview(self):
+        """实时预览：每次按键时更新画布（不触发关键词检测）"""
+        self._auto_apply_text()
+    
+    def _on_detect_keywords(self):
+        """仅在换行或移出时触发关键词检测"""
+        self._auto_detect_silent()
     
     def _auto_detect_silent(self):
         """静默自动检测关键词并自动应用到画布"""
