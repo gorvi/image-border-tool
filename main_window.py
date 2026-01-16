@@ -1432,7 +1432,7 @@ class MainWindow(tk.Tk):
         font_combo.pack(side=tk.LEFT, padx=4)
         
         def on_font_change(event):
-            self.update_text_preview()
+            self._auto_apply_text()
             
         font_combo.bind('<<ComboboxSelected>>', on_font_change)
         
