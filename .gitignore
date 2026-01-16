@@ -52,3 +52,10 @@ test_output/
 
 # Python路径缓存
 .python_path
+
+# Local Settings
+settings.json
+
+# AI Agent
+.agent/
+*.spec

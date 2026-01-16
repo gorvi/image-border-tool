@@ -7,6 +7,8 @@ import io
 import os
 import random
 import math
+import hashlib
+from constants import MACARON_COLORS, DOPAMINE_COLORS
 
 
 class ImageProcessor:
@@ -261,10 +263,9 @@ class TextLayer:
         cls._font_search_cache[family] = None
         return None
 
-    def __init__(self, content, font_size=48, color='#FFFFFF', 
-                 font_family='pingfang', align='left', position='top',
-                 margin=20, shadow=None, stroke=None, highlight=None,
-                 bold=False, italic=False, underline=False):
+    def __init__(self, content, font_size=48, color='#FFFFFF', font_family='pingfang', 
+                 align='center', position='bottom', margin=20, shadow=None, stroke=None, 
+                 highlight=None, bold=False, italic=False, underline=False, indent=False):
         """
         初始化文字层
         
@@ -282,6 +283,7 @@ class TextLayer:
             bold: 加粗
             italic: 斜体
             underline: 下划线
+            indent: 首行缩进 (True/False)
         """
         self.content = content
         self.font_size = font_size
@@ -296,6 +298,7 @@ class TextLayer:
         self.bold = bold
         self.italic = italic
         self.underline = underline
+        self.indent = indent if indent is not None else False
         
         # 相对坐标 (用于拖拽)
         self.rel_x = 0.5
@@ -360,7 +363,7 @@ class TextLayer:
         print("[DEBUG] 使用 Pillow 默认字体")
         return ImageFont.load_default()
     
-    def render(self, canvas_width, canvas_height, scale=1.0):
+    def render(self, canvas_width, canvas_height, scale=1.0, safe_margin_x=0):
         """
         渲染文字为 RGBA 图像
         
@@ -387,7 +390,9 @@ class TextLayer:
         temp_draw = ImageDraw.Draw(temp_img)
         
         # 自动换行处理：按画布宽度减去边距
-        max_text_width = canvas_width - scaled_margin * 2
+        # [FIX] 增加 safe_margin_x (边框防遮挡)
+        max_text_width = int(canvas_width - (self.margin * 2 * scale) - (safe_margin_x * 2))
+        max_text_width = max(100, max_text_width) # 最小保底宽度
         
         # 将文本按行拆分，然后对每行进行自动换行
         original_lines = self.content.split('\n')
@@ -397,7 +402,12 @@ class TextLayer:
             if not original_line:
                 wrapped_lines.append('')
                 continue
-            
+                
+            # 首行缩进处理 (只有在内容不为空时)
+            if self.indent:
+                # 使用全角空格 (2个字符)
+                original_line = '\u3000\u3000' + original_line.lstrip()
+
             # 逐字符测量，找到换行点
             words = list(original_line)  # 中文按字符拆分
             current_line = ''
@@ -435,10 +445,11 @@ class TextLayer:
         text_height = sum(line_heights) + line_spacing * (len(lines) - 1) if lines else 0
         
         # 添加描边和阴影的额外空间
-        padding = scaled_stroke_width * 2 + 10
+        # 添加描边和阴影的额外空间
+        padding = scaled_stroke_width * 2 + int(10 * scale)
         if self.shadow.get('enabled'):
             shadow_offset = self.shadow.get('offset', (2, 2))
-            padding += max(abs(shadow_offset[0]), abs(shadow_offset[1])) * int(scale) + 5
+            padding += max(abs(shadow_offset[0]), abs(shadow_offset[1])) * int(scale) + int(5 * scale)
         
         # 额外底部边距，防止文字下降部分被截断
         bottom_extra = int(scaled_font_size * 0.3)
@@ -463,88 +474,146 @@ class TextLayer:
             
             line_y = draw_y + sum(line_heights[:i]) + line_spacing * i
             
-            # 0. 绘制关键字高亮下划线 (智能限制：每10个字符或每行最多1个高亮)
+
+            # 0. 绘制关键字高亮 (升级版：防重叠 + 防连续)
             if self.highlight.get('enabled') and self.highlight.get('keywords'):
+                import re
+                import hashlib
+                import math
+                from constants import MACARON_COLORS, DOPAMINE_COLORS
                 highlight_color = self.highlight.get('color', '#FFB7B2')
-                underline_height = max(4, int(scaled_font_size * 0.15))  # 下划线高度
+                underline_height = max(4, int(scaled_font_size * 0.15))
                 
-                # 记录已高亮的10字符段，避免同段内多次高亮
-                highlighted_segments = set()
-                
+                # 1. 收集所有候选匹配
+                candidates = [] # item: (start, end, keyword, hash_key)
                 for keyword in self.highlight.get('keywords', []):
-                    if not keyword:
-                        continue
-                    # 查找关键字在行中的位置
-                    idx = line.lower().find(keyword.lower())
-                    if idx == -1:
-                        continue
+                    if not keyword: continue
+                    pattern = re.compile(re.escape(keyword), re.IGNORECASE)
+                    for match in pattern.finditer(line):
+                        candidates.append({
+                            'start': match.start(),
+                            'end': match.end(),
+                            'text': match.group(),
+                            'keyword': keyword,
+                            'len': match.end() - match.start()
+                        })
+                
+                # 2. 排序：优先长词 (避免 "Apple Pie" 的 "Apple" 被优先匹配)
+                candidates.sort(key=lambda x: x['len'], reverse=True)
+                
+                # 3. 筛选：防重叠 & 防连续 (Greedy selection)
+                selected_matches = []
+                occupied_mask = [False] * len(line) # 简单的位图标记
+                
+                # 最小间距 (Gap)，例如 12 个字符 (约等于 15字限制)
+                min_gap = 12
+                
+                for cand in candidates:
+                    start, end = cand['start'], cand['end']
                     
-                    # 计算该关键词所属的10字符段
-                    segment_id = idx // 10
-                    if segment_id in highlighted_segments:
-                        continue  # 该段已有高亮，跳过
+                    # 检查是否与已选区域冲突 (包括间距)
+                    # 检查区间 [max(0, start-gap), min(len, end+gap)] 是否被占用
+                    check_start = max(0, start - min_gap)
+                    check_end = min(len(line), end + min_gap)
                     
-                    highlighted_segments.add(segment_id)
+                    is_colliding = False
+                    for k in range(check_start, check_end):
+                        if k < len(occupied_mask) and occupied_mask[k]:
+                            is_colliding = True
+                            break
                     
-                    # 计算关键字的x位置和宽度
+                    if not is_colliding:
+                        # 选中该匹配
+                        selected_matches.append(cand)
+                        # 标记占用 (严格占用，间距已在检查时处理)
+                        for k in range(start, end):
+                            occupied_mask[k] = True
+
+                # 4. 绘制所有选中项
+                for match in selected_matches:
+                    idx = match['start']
+                    keyword_text = match['text']
+                    keyword = match['keyword']
+                    
                     prefix = line[:idx]
-                    keyword_text = line[idx:idx+len(keyword)]
-                    
                     prefix_bbox = temp_draw.textbbox((0, 0), prefix, font=font) if prefix else (0, 0, 0, 0)
                     keyword_bbox = temp_draw.textbbox((0, 0), keyword_text, font=font)
                     
                     kw_x = line_x + (prefix_bbox[2] - prefix_bbox[0])
                     kw_width = keyword_bbox[2] - keyword_bbox[0]
-                    kw_y = line_y + line_heights[i] - underline_height  # 在文字底部
+                    kw_y = line_y + line_heights[i] - underline_height
+
+                    # 样式逻辑
+                    styles_pool = ['underline', 'wavy', 'background', 'marker', 'frame', 'bracket']
+                    style_hash = int(hashlib.md5((keyword + str(idx) + "style").encode('utf-8')).hexdigest(), 16)
+                    style_type = styles_pool[style_hash % len(styles_pool)]
                     
-                    # 绘制随机样式高亮
-                    style_type = random.choice(['underline', 'wavy', 'background', 'marker'])
-                    base_color = highlight_color
-                    
-                    # 解析颜色 (如果需要处理透明度)
-                    if base_color.startswith('#'):
-                        rgb = tuple(int(base_color.lstrip('#')[j:j+2], 16) for j in (0, 2, 4))
+                    if highlight_color == 'random':
+                        color_pool = MACARON_COLORS + DOPAMINE_COLORS
+                        hash_val = int(hashlib.md5((keyword + str(idx)).encode('utf-8')).hexdigest(), 16)
+                        base_color = color_pool[hash_val % len(color_pool)]
                     else:
-                        rgb = (255, 183, 178) # Default pink
-                        
+                        base_color = str(highlight_color).strip()
+
+                    try:
+                        if base_color and base_color.startswith('#'):
+                            rgb = tuple(int(base_color.lstrip('#')[j:j+2], 16) for j in (0, 2, 4))
+                        else:
+                            rgb = (255, 183, 178)
+                    except:
+                        rgb = (255, 183, 178)
+
+                    # 绘制具体的样式 (代码复用之前逻辑)
                     if style_type == 'underline':
-                        # 1. 经典下划线 (加一点手绘感的偏移)
-                        h_h = max(3, int(scaled_font_size * 0.1))
-                        h_y = kw_y + underline_height - h_h
-                        render_draw.rectangle(
-                            [kw_x, h_y, kw_x + kw_width, h_y + h_h],
-                            fill=rgb + (255,)
-                        )
-                        
+                        h_h = max(8, int(scaled_font_size * 0.2))
+                        h_y = kw_y + underline_height - h_h + 3
+                        render_draw.rectangle([kw_x, h_y, kw_x + kw_width, h_y + h_h], fill=rgb + (255,))
                     elif style_type == 'wavy':
-                        # 2. 波浪线
-                        wave_amp = max(2, int(scaled_font_size * 0.08))
-                        wave_freq = 0.3
+                         # 2. 波浪线 (超级加倍)
+                        wave_amp = max(6, int(scaled_font_size * 0.15)) # 再次增加振幅
+                        wave_freq = 0.2 # 频率更低
                         points = []
                         steps = int(kw_width)
                         start_y = kw_y + underline_height - wave_amp
                         for sx in range(0, steps, 2):
-                            # y = A * sin(wx)
                             dy = wave_amp * math.sin(sx * wave_freq)
                             points.append((kw_x + sx, start_y + dy))
-                        
                         if len(points) > 1:
-                            render_draw.line(points, fill=rgb + (220,), width=max(2, int(scaled_font_size * 0.05)))
-                            
+                            render_draw.line(points, fill=rgb + (255,), width=max(12, int(scaled_font_size * 0.25)))
                     elif style_type == 'background':
-                        # 3. 圆角矩形背景 (半透明)
-                        pad = int(scaled_font_size * 0.1)
+                        pad = int(scaled_font_size * 0.15)
                         bg_rect = [kw_x - pad, line_y, kw_x + kw_width + pad, line_y + line_heights[i]]
-                        render_draw.rounded_rectangle(bg_rect, radius=pad, fill=rgb + (100,))
-                        
+                        render_draw.rounded_rectangle(bg_rect, radius=pad, fill=rgb + (160,))
                     elif style_type == 'marker':
-                        # 4. 马克笔涂抹效果 (底部2/3高度，半透明)
-                        marker_h = int(line_heights[i] * 0.6)
-                        marker_y = line_y + line_heights[i] - marker_h
-                        render_draw.rectangle(
-                            [kw_x, marker_y, kw_x + kw_width, marker_y + marker_h],
-                            fill=rgb + (140,)
-                        )
+                         marker_h = int(line_heights[i] * 0.8) # 覆盖更多文字高度
+                         marker_y = line_y + line_heights[i] - marker_h + 5
+                         render_draw.rectangle([kw_x, marker_y, kw_x + kw_width, marker_y + marker_h], fill=rgb + (160,))
+                    elif style_type == 'frame':
+                        # 5. 线框 (镂空矩形)
+                        pad = int(scaled_font_size * 0.1)
+                        frame_rect = [kw_x - pad, line_y, kw_x + kw_width + pad, line_y + line_heights[i]]
+                        outline_w = max(2, int(scaled_font_size * 0.05))
+                        render_draw.rectangle(frame_rect, outline=rgb + (255,), width=outline_w)
+                    elif style_type == 'bracket':
+                        # 6. 括弧 (左右中括号)
+                        bracket_w = max(4, int(scaled_font_size * 0.15)) # 括弧宽度
+                        bracket_h = line_heights[i] + 4
+                        line_w = max(2, int(scaled_font_size * 0.05)) # 线条粗细
+                        
+                        # 左括号
+                        lx = kw_x - bracket_w
+                        ly = line_y - 2
+                        points_l = [(lx + bracket_w, ly), (lx, ly), (lx, ly + bracket_h), (lx + bracket_w, ly + bracket_h)]
+                        render_draw.line(points_l, fill=rgb + (255,), width=line_w)
+                        
+                        # 右括号
+                        rx = kw_x + kw_width + bracket_w
+                        ry = ly
+                        points_r = [(rx - bracket_w, ry), (rx, ry), (rx, ry + bracket_h), (rx - bracket_w, ry + bracket_h)]
+                        render_draw.line(points_r, fill=rgb + (255,), width=line_w)
+            
+            # [END HIGHLIGHT]
+
             
             # 1. 绘制阴影
             if self.shadow.get('enabled'):
@@ -558,17 +627,28 @@ class TextLayer:
             stroke_w = scaled_stroke_width if self.stroke.get('enabled') else 0
             stroke_c = self.stroke.get('color', '#000000') if self.stroke.get('enabled') else self.color
             
-            # 加粗：使用描边模拟（如果没有启用描边，则使用文字颜色描边）
-            if self.bold and stroke_w == 0:
-                stroke_w = max(1, int(scaled_font_size * 0.03))  # 粗度约3%
-                stroke_c = self.color
+            # 加粗处理：如果启用了 Bold，通过偏移多次绘制来实现，避免与 Stroke 冲突
+            # 策略：
+            # 1. 绘制偏移文字 (加粗层)
+            # 2. 绘制主文字 (带描边)
             
+            bold_offset = max(1, int(scaled_font_size * 0.02)) if self.bold else 0
+            
+            if bold_offset > 0:
+                # 绘制加粗底色 (偏移绘制)
+                # 向右偏移一次
+                if stroke_w > 0:
+                    render_draw.text((line_x + bold_offset, line_y), line, font=font, 
+                                   fill=self.color, stroke_width=stroke_w, stroke_fill=stroke_c)
+                else:
+                    render_draw.text((line_x + bold_offset, line_y), line, font=font, fill=self.color)
+            
+            # 绘制主文字 (覆盖在偏移层上)
             if stroke_w > 0:
                 render_draw.text((line_x, line_y), line, font=font, 
                                fill=self.color, stroke_width=stroke_w,
                                stroke_fill=stroke_c)
             else:
-                # 3. 绘制文字
                 render_draw.text((line_x, line_y), line, font=font, fill=self.color)
             
             # 4. 下划线
@@ -577,10 +657,23 @@ class TextLayer:
                 underline_offset = int(scaled_font_size * 0.15)  # 15% 额外偏移
                 underline_y = line_y + line_heights[i] + underline_offset
                 underline_h = max(2, int(scaled_font_size * 0.06))
-                render_draw.rectangle(
-                    [line_x, underline_y, line_x + line_widths[i], underline_y + underline_h],
-                    fill=self.color
-                )
+                
+                # 修复：如果有缩进，下划线应该跳过前导空格
+                current_underline_x = line_x
+                current_underline_w = line_widths[i]
+                
+                if self.indent and i < len(lines) and line.startswith('\u3000\u3000'):
+                    # 测量两个全角空格的宽度
+                    space_bbox = temp_draw.textbbox((0, 0), '\u3000\u3000', font=font)
+                    space_width = space_bbox[2] - space_bbox[0]
+                    current_underline_x += space_width
+                    current_underline_w -= space_width
+                
+                if current_underline_w > 0:
+                    render_draw.rectangle(
+                        [current_underline_x, underline_y, current_underline_x + current_underline_w, underline_y + underline_h],
+                        fill=self.color
+                    )
         # 5. 斜体效果 (使用仿射变换倾斜)
         if self.italic:
             from PIL import Image as PILImage
@@ -599,26 +692,35 @@ class TextLayer:
         
         # 计算在画布上的位置
         x, y = self._calculate_position(canvas_width, canvas_height, 
-                                         render_width, render_height, scaled_margin)
+                                         render_width, render_height, scaled_margin, safe_margin_x)
         
         return render_img, x, y
     
-    def _calculate_position(self, canvas_width, canvas_height, text_width, text_height, margin):
+    def _calculate_position(self, canvas_width, canvas_height, text_width, text_height, margin, safe_margin_x=0):
         """计算文字在画布上的位置"""
+        # 处理自定义位置 (拖拽后)
+        if self.position == 'custom':
+            x = int(self.rel_x * canvas_width)
+            y = int(self.rel_y * canvas_height)
+            return x, y
+            
+        # 标准位置处理
         # 水平位置
         if self.align == 'left':
-            x = margin
+            x = margin + safe_margin_x
         elif self.align == 'right':
-            x = canvas_width - text_width - margin
+            x = canvas_width - text_width - margin - safe_margin_x
         else:  # center
             x = (canvas_width - text_width) // 2
+
         
         # 垂直位置
         if self.position == 'top':
             y = margin
         elif self.position == 'bottom':
             # 底部额外留出空间，避免太贴边
-            y = canvas_height - text_height - margin * 2
+            y = canvas_height - text_height - margin * 2 - safe_margin_x # 底部也稍微避让一下边框
+
         else:  # center
             y = (canvas_height - text_height) // 2
         
@@ -634,8 +736,13 @@ class TextLayer:
             'align': self.align,
             'position': self.position,
             'margin': self.margin,
+            'indent': self.indent,
             'shadow': self.shadow,
             'stroke': self.stroke,
+            'highlight': self.highlight,
+            'bold': self.bold,
+            'italic': self.italic,
+            'underline': self.underline,
             'rel_x': self.rel_x,
             'rel_y': self.rel_y,
         }
@@ -651,8 +758,13 @@ class TextLayer:
             align=data.get('align', 'center'),
             position=data.get('position', 'bottom'),
             margin=data.get('margin', 20),
+            indent=data.get('indent', False),
             shadow=data.get('shadow'),
             stroke=data.get('stroke'),
+            highlight=data.get('highlight'),
+            bold=data.get('bold', False),
+            italic=data.get('italic', False),
+            underline=data.get('underline', False),
         )
         layer.rel_x = data.get('rel_x', 0.5)
         layer.rel_y = data.get('rel_y', 0.9)
@@ -749,17 +861,18 @@ class CompositeImage:
         
         self.canvas.paste(resized, (paste_x, paste_y))
     
-    def add_text_layer(self, text_layer, scale=1.0):
+    def add_text_layer(self, text_layer, scale=1.0, border_width=0):
         """添加文字层到画布
         
         Args:
             text_layer: TextLayer 实例
             scale: 缩放比例 (用于导出时按分辨率缩放)
+            border_width: 边框宽度，用于计算文字安全边距
         """
         if not text_layer or not text_layer.content:
             return
         
-        rendered, x, y = text_layer.render(self.width, self.height, scale)
+        rendered, x, y = text_layer.render(self.width, self.height, scale, safe_margin_x=border_width)
         if rendered:
             # 确保画布是 RGBA 模式
             if self.canvas.mode != 'RGBA':
@@ -922,13 +1035,22 @@ class CompositeImage:
         elif pattern_id == 'heart':
             # 心形图案
             import math
-            spacing = max(pattern_size * 2, 10)
+            ideal_spacing = max(pattern_size * 2, 10)
             icon_size = max(pattern_size, 4)
-            step = spacing
             
-            for y in range(0, height, step):
-                for x in range(0, width, step):
-                    cx, cy = x + step//2, y + step//2
+            # 自适应间距 X
+            num_x = max(1, round(width / ideal_spacing))
+            step_x = width / num_x
+            
+            # 自适应间距 Y
+            num_y = max(1, round(height / ideal_spacing))
+            step_y = height / num_y
+            
+            for iy in range(num_y):
+                cy = (iy + 0.5) * step_y
+                for ix in range(num_x):
+                    cx = (ix + 0.5) * step_x
+                    
                     # 简化绘制心形：使用两个圆弧和一个三角形组合，或者贝塞尔曲线
                     # 这里使用简单的点集模拟
                     pts = []
@@ -946,14 +1068,23 @@ class CompositeImage:
         elif pattern_id == 'club':
             # 梅花图案 (三叶草)
             import math
-            spacing = max(pattern_size * 2, 10)
+            ideal_spacing = max(pattern_size * 2, 10)
             icon_size = max(pattern_size, 4)
-            step = spacing
             r = icon_size / 3  # 叶子半径
             
-            for y in range(0, height, step):
-                for x in range(0, width, step):
-                    cx, cy = x + step//2, y + step//2
+            # 自适应间距 X
+            num_x = max(1, round(width / ideal_spacing))
+            step_x = width / num_x
+            
+            # 自适应间距 Y
+            num_y = max(1, round(height / ideal_spacing))
+            step_y = height / num_y
+            
+            for iy in range(num_y):
+                cy = (iy + 0.5) * step_y
+                for ix in range(num_x):
+                    cx = (ix + 0.5) * step_x
+                    
                     # 绘制三个圆
                     # 上
                     draw.ellipse([cx-r, cy-r-r, cx+r, cy-r+r], fill=color)
@@ -968,14 +1099,23 @@ class CompositeImage:
 
         elif pattern_id == 'triangle':
             # 三角形图案
-            spacing = max(pattern_size * 2, 10)
+            ideal_spacing = max(pattern_size * 2, 10)
             icon_size = max(pattern_size, 4)
-            step = spacing
             h = icon_size * 0.866 # sqrt(3)/2
             
-            for y in range(0, height, step):
-                for x in range(0, width, step):
-                    cx, cy = x + step//2, y + step//2
+            # 自适应间距 X
+            num_x = max(1, round(width / ideal_spacing))
+            step_x = width / num_x
+            
+            # 自适应间距 Y
+            num_y = max(1, round(height / ideal_spacing))
+            step_y = height / num_y
+            
+            for iy in range(num_y):
+                cy = (iy + 0.5) * step_y
+                for ix in range(num_x):
+                    cx = (ix + 0.5) * step_x
+                    
                     pts = [
                         (cx, cy - h/2),
                         (cx - icon_size/2, cy + h/2),
@@ -985,14 +1125,23 @@ class CompositeImage:
 
         elif pattern_id == 'diamond':
             # 菱形图案
-            spacing = max(pattern_size * 2, 10)
+            ideal_spacing = max(pattern_size * 2, 10)
             icon_size = max(pattern_size, 4)
-            step = spacing
             r = icon_size / 2
             
-            for y in range(0, height, step):
-                for x in range(0, width, step):
-                    cx, cy = x + step//2, y + step//2
+            # 自适应间距 X
+            num_x = max(1, round(width / ideal_spacing))
+            step_x = width / num_x
+            
+            # 自适应间距 Y
+            num_y = max(1, round(height / ideal_spacing))
+            step_y = height / num_y
+            
+            for iy in range(num_y):
+                cy = (iy + 0.5) * step_y
+                for ix in range(num_x):
+                    cx = (ix + 0.5) * step_x
+                    
                     pts = [
                         (cx, cy - r),      # 顶
                         (cx + r, cy),      # 右

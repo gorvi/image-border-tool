@@ -373,6 +373,16 @@ DOPAMINE_COLORS = [
 QUICK_COLORS = [
     '#000000', # 黑
     '#FFFFFF', # 白
-    *DOPAMINE_COLORS,
     *MACARON_COLORS
+]
+
+# 随机字体列表 (跨平台常用 + 中文)
+RANDOM_FONTS = [
+    # macOS / iOS
+    "PingFang SC", "Heiti SC", "Songti SC", "Kaiti SC", "Apple LiGothic",
+    # Windows / Office
+    "Microsoft YaHei", "SimHei", "SimSun", "KaiTi", "FangSong",
+    # English / Universal
+    "Arial", "Helvetica", "Georgia", "Times New Roman", "Courier New", 
+    "Verdana", "Trebuchet MS", "Impact", "Comic Sans MS", "Chalkboard SE"
 ]

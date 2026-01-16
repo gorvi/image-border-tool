@@ -3,10 +3,16 @@
 """
 
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
-from PIL import Image
+from tkinter import ttk, messagebox, filedialog, colorchooser, simpledialog
+from PIL import Image, ImageTk, ImageDraw
+import json
+import random
 import os
+import sys
+import subprocess
 from datetime import datetime
+
+from auth_manager import auth  # [AUTH] 导入授权管理器
 
 from canvas_widget import CanvasWidget
 from image_processor import ImageProcessor, CompositeImage
@@ -151,9 +157,12 @@ class MainWindow(tk.Tk):
         self.batch_regenerate_all = tk.BooleanVar(value=False)  # 强制重新处理 (覆盖)
         
         # 批量随机化选项
-        self.batch_random_color = tk.BooleanVar(value=False)
-        self.batch_random_style = tk.BooleanVar(value=False)
-        self.batch_random_pattern = tk.BooleanVar(value=False)
+        # 批量随机化选项
+        self.batch_random_color = tk.BooleanVar(value=True)
+        self.batch_random_style = tk.BooleanVar(value=True)
+        self.batch_random_pattern = tk.BooleanVar(value=True)
+        self.batch_random_highlight = tk.BooleanVar(value=True) # NEW
+        self.batch_random_font_style = tk.BooleanVar(value=True) # 随机字体样式
         self.batch_match_canvas = tk.BooleanVar(value=True) # 参考画布位置
         
         # 文字层配置
@@ -180,8 +189,157 @@ class MainWindow(tk.Tk):
         # 加载用户设置
         self.load_settings()
         
-        # 创建UI
+         
+        # [AUTH] 初始化后检查授权
+        self.check_auth_at_startup()
+        self.create_auth_menu()
+        
+        # [UI] 创建界面
         self.create_widgets()
+
+    def create_auth_menu(self):
+        """创建授权菜单"""
+        menubar = tk.Menu(self)
+        self.config(menu=menubar)
+        
+        # 帮助菜单
+        help_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="帮助", menu=help_menu)
+        help_menu.add_command(label="软件激活 / 授权信息", command=self.show_activation_dialog)
+        help_menu.add_command(label="用量统计", command=self.show_usage_dialog)
+        help_menu.add_command(label="关于", command=lambda: messagebox.showinfo("关于", "图片批量套版工具 v1.0"))
+
+    def check_auth_at_startup(self):
+        """启动时检查授权"""
+        status = auth.get_status()
+        title_suffix = ""
+        
+        if status['status'] == 'limited':
+            messagebox.showwarning("今日额度耗尽", f"{status['msg']}\n请明天再来或激活解除限制。")
+            title_suffix = " [免费版 - 今日额度耗尽]"
+        elif status['status'] == 'trial':
+             # 试用期提示
+             title_suffix = f" [全功能体验版 - {status['msg']}]"
+        elif status['status'] == 'free':
+             title_suffix = f" [免费版 - {status['msg']}]"
+             
+        if title_suffix:
+            self.title(f"{self.title().split(' [')[0]}{title_suffix}")
+
+    def show_activation_dialog(self):
+        """显示激活对话框"""
+        info = auth.get_activation_info()
+        status_msg = info['status']['msg']
+        
+        dialog = tk.Toplevel(self)
+        dialog.title("软件激活")
+        dialog.geometry("500x350")
+        dialog.resizable(False, False)
+        
+        # 居中
+        dialog.transient(self)
+        dialog.grab_set()
+        
+        padding = 20
+        
+        # 标题
+        tk.Label(dialog, text="软件授权激活", font=("Arial", 16, "bold")).pack(pady=padding)
+        
+        # 状态
+        status_frame = tk.Frame(dialog)
+        status_frame.pack(fill=tk.X, padx=padding)
+        tk.Label(status_frame, text=f"当前状态: {status_msg}", fg="red" if info['status']['status']!='activated' else "green").pack(anchor='w')
+        
+        # 机器码区域
+        code_frame = tk.LabelFrame(dialog, text="您的机器码 (请复制发给管理员)", pady=10)
+        code_frame.pack(fill=tk.X, padx=padding, pady=10)
+        
+        entry_machine = tk.Entry(code_frame, font=("Arial", 12), justify='center')
+        entry_machine.pack(fill=tk.X, padx=10)
+        entry_machine.insert(0, info['machine_code'])
+        entry_machine.config(state='readonly') # 只读
+        
+        # 激活码输入
+        input_frame = tk.LabelFrame(dialog, text="输入激活码", pady=10)
+        input_frame.pack(fill=tk.X, padx=padding, pady=10)
+        
+        entry_key = tk.Entry(input_frame, font=("Arial", 12), justify='center')
+        entry_key.pack(fill=tk.X, padx=10)
+        
+        def do_activate():
+            code = entry_key.get()
+            if auth.validate_activation_code(code):
+                messagebox.showinfo("激活成功", "感谢您的支持！软件已永久激活。")
+                dialog.destroy()
+                self.title("图片批量套版工具 [永久激活版]") # 刷新标题
+            else:
+                messagebox.showerror("激活失败", "激活码错误，请检查是否对应本机机器码。")
+
+        tk.Button(dialog, text="立即激活", command=do_activate, bg="#007AFF", fg="black", font=("Arial", 12, "bold"), height=2).pack(fill=tk.X, padx=padding, pady=10)
+
+    def show_usage_dialog(self):
+        """显示用量统计"""
+        stats = auth.get_usage_stats()
+        status = auth.get_status()
+        
+        msg = (f"📊 用量统计\n\n"
+               f"累计导出总数: {stats['total_count']} 张\n"
+               f"今日导出数量: {stats['daily_count']} 张\n"
+               f"软件安装日期: {stats['install_date']}\n\n"
+               f"当前账户状态: {status['msg']}")
+               
+        messagebox.showinfo("用量统计", msg)
+
+    def create_widgets(self):
+        """创建界面组件 - 毛玻璃风格"""
+        # 主容器 - 使用 PanedWindow 实现可调整大小
+        self.paned_window = tk.PanedWindow(self, orient=tk.HORIZONTAL, 
+                                          bg=COLORS['bg'], sashwidth=4, sashpad=0,
+                                          showhandle=False, borderwidth=0)
+        # 状态变量 - 记录当前拖拽的sash索引
+        self.dragging_sash_index = None
+        
+        self.paned_window.pack(fill=tk.BOTH, expand=True)
+        
+        # 绑定鼠标事件处理拖拽限制
+        # ButtonPress: 检测点中了哪个 sash
+        self.paned_window.bind('<ButtonPress-1>', self.start_sash_drag, add='+')
+        # B1-Motion: 拦截拖拽，实施限制
+        self.paned_window.bind('<B1-Motion>', self.on_sash_drag)
+        # ButtonRelease: 结束拖拽
+        self.paned_window.bind('<ButtonRelease-1>', self.end_sash_drag, add='+')
+        
+        # 延迟绑定窗口大小改变事件
+        self.after(1000, self.bind_configure_limit)
+        
+        # 左侧面板容器
+        self.left_container = tk.Frame(self.paned_window, bg=COLORS['bg'])
+        # self.left_container.bind('<Configure>', self.on_panel_resize) # 移除容易导致闪烁的 Configure 绑定
+        
+        self.left_panel = self.create_left_panel(self.left_container)
+        self.left_panel.pack(fill=tk.BOTH, expand=True, padx=(8, 0), pady=8)
+        
+        self.left_panel_visible = True
+        
+        # 将左侧容器添加到 PanedWindow (设置最小宽度 260)
+        self.paned_window.add(self.left_container, minsize=260, width=280)
+
+        # 中间画布区域
+        self.center_panel = self.create_center_panel(self.paned_window)
+        # 设置 stretch='always' 确保中间区域优先占用空间
+        self.paned_window.add(self.center_panel, stretch='always', minsize=360)
+        
+        # 绑定文字交互回调
+        if hasattr(self, 'canvas_widget'):
+            self.canvas_widget.set_text_callback(self.on_text_transform)
+        
+        # 右侧面板
+        self.right_panel = self.create_right_panel(self.paned_window)
+        # 初始宽度设小一点，限制最小宽度
+        self.paned_window.add(self.right_panel, minsize=260, width=280)
+        
+        # 延迟应用默认边框（等待画布初始化完成）
+        self.after(200, self.apply_default_border)
         
         # 绑定快捷键
         self.bind('<Command-z>', lambda e: self.undo())
@@ -199,8 +357,10 @@ class MainWindow(tk.Tk):
                     settings = json.load(f)
                     self.batch_input_dir = settings.get('batch_input_dir', '')
                     self.batch_output_dir = settings.get('batch_output_dir', '')
+                    self.batch_text_dir = settings.get('batch_text_dir', '') # NOW SAVED
                     self.processed_images = set(settings.get('processed_images', []))
-                    print(f"✓ 已加载设置: 输入={self.batch_input_dir}, 输出={self.batch_output_dir}, 已处理={len(self.processed_images)}张")
+                    self.preset_themes = settings.get('preset_themes', [])
+                    print(f"✓ 已加载设置: 输入={self.batch_input_dir}, 输出={self.batch_output_dir}, 预设={len(self.preset_themes)}个")
         except Exception as e:
             print(f"加载设置失败: {e}")
     
@@ -211,8 +371,11 @@ class MainWindow(tk.Tk):
         try:
             settings = {
                 'batch_input_dir': self.batch_input_dir,
+                'batch_input_dir': self.batch_input_dir,
                 'batch_output_dir': self.batch_output_dir,
-                'processed_images': list(self.processed_images)
+                'batch_text_dir': self.batch_text_dir, # NOW SAVED
+                'processed_images': list(self.processed_images),
+                'preset_themes': self.preset_themes
             }
             with open(settings_path, 'w', encoding='utf-8') as f:
                 json.dump(settings, f, ensure_ascii=False, indent=2)
@@ -932,6 +1095,10 @@ class MainWindow(tk.Tk):
         for tid, frame in self.tab_frames.items():
             frame.pack_forget()
         self.tab_frames[tab_id].pack(fill=tk.BOTH, expand=True)
+        
+        # 如果是历史记录Tab，刷新显示
+        if tab_id == 'history':
+            self.update_history_display()
     
     def _update_tab_rows(self):
         """更新标签行顺序：激活行在下面"""
@@ -1469,18 +1636,20 @@ class MainWindow(tk.Tk):
                       font=('SF Pro Text', 9),
                       command=self._on_highlight_toggle).pack(side=tk.LEFT)
         
-        # 高亮颜色 (紧凑版)
-        self.highlight_color_var = tk.StringVar(value='#FFB7B2')
-        highlight_colors = ['#FFB7B2', '#FFDAC1', '#E2F0CB', '#B5EAD7', '#C7CEEA']
-        for c in highlight_colors:
-            hc = tk.Canvas(text_actions_frame, width=14, height=14, bg=c, highlightthickness=1,
-                          highlightbackground=COLORS['separator'], cursor='hand2')
-            hc.pack(side=tk.LEFT, padx=1)
-            hc.bind('<Button-1>', lambda e, color=c: self.set_highlight_color(color))
+        # 高亮颜色 (默认随机)
+        self.highlight_color_var = tk.StringVar(value='random')
+        # 用户要求删除切换颜色的方块，默认使用随机多巴胺/马卡龙色
+        tk.Label(text_actions_frame, text='(随机糖果色)', font=('SF Pro Text', 9),
+                bg=COLORS['panel_bg'], fg=COLORS['text_secondary']).pack(side=tk.LEFT, padx=2)
 
         
         # 存储自动检测的关键词 (内部使用)
         self._auto_keywords = []
+        
+        
+        def _on_setting_release(action_name):
+            self._auto_apply_text()
+            self.save_history(action_name)
         
         # 2. 字体设置
         font_frame = tk.Frame(text_frame, bg=COLORS['panel_bg'])
@@ -1509,6 +1678,7 @@ class MainWindow(tk.Tk):
         
         def on_font_change(event):
             self._auto_apply_text()
+            self.save_history("切换字体")
             
         font_combo.bind('<<ComboboxSelected>>', on_font_change)
         
@@ -1520,12 +1690,13 @@ class MainWindow(tk.Tk):
                  bg=COLORS['panel_bg'], fg=COLORS['text_secondary']).pack(side=tk.LEFT)
         
         self.font_size_var = tk.IntVar(value=48)
-        size_scale = tk.Scale(size_frame, from_=12, to=120, orient=tk.HORIZONTAL,
+        self.font_size_scale = tk.Scale(size_frame, from_=12, to=120, orient=tk.HORIZONTAL,
                              variable=self.font_size_var, bg=COLORS['panel_bg'], 
                              fg=COLORS['text_primary'], highlightthickness=0,
                              troughcolor=COLORS['bg_secondary'], length=100,
                              command=lambda v: self.update_text_preview())
-        size_scale.pack(side=tk.LEFT, padx=(8, 0))
+        self.font_size_scale.pack(side=tk.LEFT, padx=(8, 0))
+        self.font_size_scale.bind('<ButtonRelease-1>', lambda e: _on_setting_release("设置字号"))
         
         self.font_size_label = tk.Label(size_frame, text='48', font=('SF Pro Text', 10),
                                         bg=COLORS['panel_bg'], fg=COLORS['text_primary'], width=4)
@@ -1540,6 +1711,10 @@ class MainWindow(tk.Tk):
         
         self.text_color_var = tk.StringVar(value='#333333')
         
+        def _set_text_color_with_history(color):
+            self.set_text_color(color)
+            self.save_history("设置文字颜色")
+        
         # 基础色
         basic_frame = tk.Frame(color_section, bg=COLORS['panel_bg'])
         basic_frame.pack(anchor='w', pady=2)
@@ -1548,7 +1723,7 @@ class MainWindow(tk.Tk):
             cb = tk.Canvas(basic_frame, width=18, height=18, bg=c, highlightthickness=1,
                           highlightbackground=COLORS['separator'], cursor='hand2')
             cb.pack(side=tk.LEFT, padx=1)
-            cb.bind('<Button-1>', lambda e, color=c: self.set_text_color(color))
+            cb.bind('<Button-1>', lambda e, color=c: _set_text_color_with_history(color))
         
         # 马卡龙色
         from constants import MACARON_COLORS, DOPAMINE_COLORS
@@ -1558,7 +1733,7 @@ class MainWindow(tk.Tk):
             cb = tk.Canvas(macaron_frame, width=18, height=18, bg=c, highlightthickness=1,
                           highlightbackground=COLORS['separator'], cursor='hand2')
             cb.pack(side=tk.LEFT, padx=1)
-            cb.bind('<Button-1>', lambda e, color=c: self.set_text_color(color))
+            cb.bind('<Button-1>', lambda e, color=c: _set_text_color_with_history(color))
         
         # 多巴胺色
         dopamine_frame = tk.Frame(color_section, bg=COLORS['panel_bg'])
@@ -1567,7 +1742,7 @@ class MainWindow(tk.Tk):
             cb = tk.Canvas(dopamine_frame, width=18, height=18, bg=c, highlightthickness=1,
                           highlightbackground=COLORS['separator'], cursor='hand2')
             cb.pack(side=tk.LEFT, padx=1)
-            cb.bind('<Button-1>', lambda e, color=c: self.set_text_color(color))
+            cb.bind('<Button-1>', lambda e, color=c: _set_text_color_with_history(color))
         
         # 自定义颜色按钮
         custom_btn_frame = tk.Frame(color_section, bg=COLORS['panel_bg'])
@@ -1599,7 +1774,7 @@ class MainWindow(tk.Tk):
                           bg=COLORS['bg_tertiary'], fg=COLORS['text_primary'],
                           padx=8, pady=2, cursor='hand2')
             btn.pack(side=tk.LEFT, padx=2)
-            btn.bind('<Button-1>', lambda e, v=val: self._set_align(v))
+            btn.bind('<Button-1>', lambda e, v=val: self._set_align_with_history(v))
         
         # 6. 位置设置 (图标按钮)
         pos_frame = tk.Frame(text_frame, bg=COLORS['panel_bg'])
@@ -1616,7 +1791,7 @@ class MainWindow(tk.Tk):
                           bg=COLORS['bg_tertiary'], fg=COLORS['text_primary'],
                           padx=8, pady=2, cursor='hand2')
             btn.pack(side=tk.LEFT, padx=2)
-            btn.bind('<Button-1>', lambda e, v=val: self._set_position(v))
+            btn.bind('<Button-1>', lambda e, v=val: self._set_position_with_history(v))
         
         # 6.1 文字样式 (加粗/斜体/下划线)
         style_frame = tk.Frame(text_frame, bg=COLORS['panel_bg'])
@@ -1639,8 +1814,16 @@ class MainWindow(tk.Tk):
                                 bg=COLORS['bg_tertiary'], fg=COLORS['text_primary'],
                                 selectcolor=COLORS['accent'], activebackground=COLORS['bg_tertiary'],
                                 indicatoron=False, padx=8, pady=2,
-                                command=self._auto_apply_text)
+                                command=lambda: self._apply_style_with_history("切换文字样式"))
             btn.pack(side=tk.LEFT, padx=2)
+            
+        # 首行缩进 (New)
+        self.text_indent_var = tk.BooleanVar(value=True) # 默认开启
+        indent_cb = tk.Checkbutton(style_frame, text="首行缩进", variable=self.text_indent_var,
+                                  font=('SF Pro Text', 10), bg=COLORS['panel_bg'], fg=COLORS['text_primary'],
+                                  selectcolor=COLORS['accent'], activebackground=COLORS['panel_bg'],
+                                  command=lambda: self._apply_style_with_history("切换缩进"))
+        indent_cb.pack(side=tk.LEFT, padx=8)
         
         # 7. 边距设置
         margin_frame = tk.Frame(text_frame, bg=COLORS['panel_bg'])
@@ -1656,6 +1839,7 @@ class MainWindow(tk.Tk):
                                troughcolor=COLORS['bg_secondary'], length=80,
                                command=lambda v: self.update_text_preview())
         margin_scale.pack(side=tk.LEFT, padx=(8, 0))
+        margin_scale.bind('<ButtonRelease-1>', lambda e: _on_setting_release("设置文字边距"))
         
         # 8. 阴影设置 (紧凑布局)
         shadow_frame = tk.Frame(text_frame, bg=COLORS['panel_bg'])
@@ -1666,7 +1850,7 @@ class MainWindow(tk.Tk):
                       bg=COLORS['panel_bg'], fg=COLORS['text_primary'],
                       selectcolor=COLORS['accent'], activebackground=COLORS['panel_bg'],
                       font=('SF Pro Text', 10),
-                      command=self.update_text_preview).pack(side=tk.LEFT)
+                      command=lambda: self._apply_style_with_history("切换阴影")).pack(side=tk.LEFT)
         
         # 9. 描边设置 (紧凑布局，同一行)
         self.text_stroke_var = tk.BooleanVar(value=False)
@@ -1674,7 +1858,7 @@ class MainWindow(tk.Tk):
                       bg=COLORS['panel_bg'], fg=COLORS['text_primary'],
                       selectcolor=COLORS['accent'], activebackground=COLORS['panel_bg'],
                       font=('SF Pro Text', 10),
-                      command=self.update_text_preview).pack(side=tk.LEFT, padx=(12, 0))
+                      command=lambda: self._apply_style_with_history("切换描边")).pack(side=tk.LEFT, padx=(12, 0))
         
         # 描边宽度滑块
         stroke_frame = tk.Frame(text_frame, bg=COLORS['panel_bg'])
@@ -1690,6 +1874,7 @@ class MainWindow(tk.Tk):
                                troughcolor=COLORS['bg_secondary'], length=60,
                                command=lambda v: self.update_text_preview())
         stroke_scale.pack(side=tk.LEFT, padx=(4, 0))
+        stroke_scale.bind('<ButtonRelease-1>', lambda e: _on_setting_release("设置描边宽度"))
         
         # 描边颜色 (同一行，9个颜色)
         self.stroke_color_var = tk.StringVar(value='#000000')
@@ -1698,7 +1883,7 @@ class MainWindow(tk.Tk):
             sc = tk.Canvas(stroke_frame, width=14, height=14, bg=c, highlightthickness=1,
                           highlightbackground=COLORS['separator'], cursor='hand2')
             sc.pack(side=tk.LEFT, padx=1)
-            sc.bind('<Button-1>', lambda e, color=c: self._set_stroke_color(color))
+            sc.bind('<Button-1>', lambda e, color=c: self._set_stroke_color_with_history(color))
         
         # 清除文字按钮 (放在面板底部，避免误点)
         clear_frame = tk.Frame(text_frame, bg=COLORS['panel_bg'])
@@ -1742,11 +1927,26 @@ class MainWindow(tk.Tk):
         """设置对齐方式"""
         self.text_align_var.set(val)
         self._auto_apply_text()
+        
+    def _set_align_with_history(self, val):
+        self._set_align(val)
+        self.save_history(f"设置文字对齐")
     
     def _set_position(self, val):
         """设置位置"""
         self.text_position_var.set(val)
         self._auto_apply_text()
+        
+    def _set_position_with_history(self, val):
+        self._set_position(val)
+        self.save_history(f"设置文字位置")
+        
+    def _set_stroke_color(self, color):
+        self.stroke_color_var.set(color)
+        self.update_text_preview()
+    def _set_stroke_color_with_history(self, color):
+        self._set_stroke_color(color)
+        self.save_history(f"设置描边颜色")
     
     def _set_stroke_color(self, color):
         """设置描边颜色"""
@@ -1756,6 +1956,15 @@ class MainWindow(tk.Tk):
     def _on_detect_keywords(self):
         """仅在换行或移出时触发关键词检测"""
         self._auto_detect_silent()
+        self.save_history("编辑文字内容")
+    
+    def _on_highlight_toggle(self):
+        """切换自动高亮"""
+        # 如果启用了高亮，先检测关键词
+        if self.highlight_enabled_var.get():
+            self._auto_detect_silent()
+        self.update_text_preview()
+        self.save_history("编辑文字内容")
     
     def _auto_detect_silent(self):
         """静默自动检测关键词并自动应用到画布"""
@@ -1797,11 +2006,42 @@ class MainWindow(tk.Tk):
     
     def _on_highlight_toggle(self):
         """高亮开关切换时触发"""
-        # 如果启用了高亮，先检测关键词
-        if self.highlight_enabled_var.get():
-            self._auto_detect_silent()
+        # 1. 获取当前开关状态
+        enabled = self.highlight_enabled_var.get()
+        
+        # 2. 如果开启，立即执行一次完整的关键词检测 (不使用静默方法，确保拿到结果)
+        if enabled:
+            content = self.text_content_entry.get('1.0', 'end-1c')
+            keywords = []
+            if content and len(content.strip()) >= 1:
+                # 提取关键词
+                try:
+                    import jieba.analyse
+                    keywords.extend(jieba.analyse.extract_tags(content, topK=5))
+                except:
+                    pass
+                
+                # 英文和标签
+                import re
+                keywords.extend(re.findall(r'[a-zA-Z]{2,}', content))
+                keywords.extend([t.lstrip('#') for t in re.findall(r'#\w+', content)])
+            
+            # 去重并保存
+            self._auto_keywords = list(dict.fromkeys(keywords))[:8]
+        else:
+            # 关闭时清空
+            self._auto_keywords = []
+            
+        # 3. 强制重新应用文字 (直接调用应用方法，不走 preview 的 timer 逻辑)
+        print(f"[DEBUG] Toggle Highlight: {enabled}, Keywords: {self._auto_keywords}")
         self._auto_apply_text()
+        self.save_history("切换自动高亮")
     
+    def _apply_style_with_history(self, action_name="调整文字样式"):
+        """应用文字样式并保存历史"""
+        self._auto_apply_text()
+        self.save_history(action_name)
+
     def _auto_apply_text(self):
         """自动应用文字到画布"""
         from image_processor import TextLayer
@@ -1854,7 +2094,8 @@ class MainWindow(tk.Tk):
             },
             bold=self.text_bold_var.get() if hasattr(self, 'text_bold_var') else False,
             italic=self.text_italic_var.get() if hasattr(self, 'text_italic_var') else False,
-            underline=self.text_underline_var.get() if hasattr(self, 'text_underline_var') else False
+            underline=self.text_underline_var.get() if hasattr(self, 'text_underline_var') else False,
+            indent=self.text_indent_var.get() if hasattr(self, 'text_indent_var') else True
         )
         
         # 恢复自定义位置坐标
@@ -1868,8 +2109,14 @@ class MainWindow(tk.Tk):
         self.image_processor.clear_text_layers()
         
         # 渲染文字图片
-        cw = self.canvas_widget.width
-        ch = self.canvas_widget.height
+        cw = self.canvas_widget.width if self.canvas_widget.width > 10 else 800
+        ch = self.canvas_widget.height if self.canvas_widget.height > 10 else 600
+        
+        # 强制刷新关键词 (如果是高亮模式且关键词为空)
+        if self.highlight_enabled_var.get() and not self._auto_keywords:
+             # 这里不调用检测以免死循环，只取当前文本
+             pass
+             
         text_img, x, y = text_layer.render(cw, ch)
         
         if text_img:
@@ -1908,7 +2155,10 @@ class MainWindow(tk.Tk):
         # 更新颜色预览
         if hasattr(self, 'text_color_preview'):
             self.text_color_preview.config(bg=color)
-        self.update_text_preview()
+        
+        # 必须调用 _auto_apply_text 以更新 current_text_layer (用于导出)
+        # 并确保重绘
+        self._auto_apply_text()
     
     def open_text_color_picker(self):
         """打开自定义颜色选择器"""
@@ -1916,6 +2166,7 @@ class MainWindow(tk.Tk):
         
         def on_color_selected(color):
             self.set_text_color(color)
+            self.save_history("设置文字颜色")
         
         picker = ColorWheelPicker(
             self, 
@@ -1925,8 +2176,10 @@ class MainWindow(tk.Tk):
     
     def set_highlight_color(self, color):
         """设置高亮颜色"""
+        # print(f"[DEBUG] Set highlight color: {color}")
         self.highlight_color_var.set(color)
-        self.update_text_preview()
+        # 高亮颜色改变也需要重新应用文字
+        self._auto_apply_text()
     
     def auto_detect_keywords(self):
         """自动检测关键字 (使用 jieba 智能提取)"""
@@ -1970,7 +2223,7 @@ class MainWindow(tk.Tk):
             self.highlight_keywords_entry.delete(0, 'end')
             self.highlight_keywords_entry.insert(0, ','.join(unique_keywords))
             self.highlight_enabled_var.set(True)
-            self.update_text_preview()
+            self._auto_apply_text()
             self.show_toast(f'检测到 {len(unique_keywords)} 个关键词')
     
     def update_text_preview(self):
@@ -1988,6 +2241,7 @@ class MainWindow(tk.Tk):
             'align': self.text_align_var.get() if hasattr(self, 'text_align_var') else 'center',
             'position': self.text_position_var.get() if hasattr(self, 'text_position_var') else 'bottom',
             'margin': self.text_margin_var.get() if hasattr(self, 'text_margin_var') else 20,
+            'indent': self.text_indent_var.get() if hasattr(self, 'text_indent_var') else True,
             'shadow': {
                 'enabled': self.text_shadow_var.get() if hasattr(self, 'text_shadow_var') else True,
                 'color': '#000000',
@@ -1999,6 +2253,14 @@ class MainWindow(tk.Tk):
                 'color': '#000000',
                 'width': self.stroke_width_var.get() if hasattr(self, 'stroke_width_var') else 2
             },
+            'highlight': {
+                'enabled': self.highlight_enabled_var.get() if hasattr(self, 'highlight_enabled_var') else False,
+                'keywords': self._auto_keywords if hasattr(self, '_auto_keywords') else [],
+                'color': self.highlight_color_var.get() if hasattr(self, 'highlight_color_var') else '#FFB7B2'
+            },
+            'bold': self.text_bold_var.get() if hasattr(self, 'text_bold_var') else False,
+            'italic': self.text_italic_var.get() if hasattr(self, 'text_italic_var') else False,
+            'underline': self.text_underline_var.get() if hasattr(self, 'text_underline_var') else False
         }
         
         # 刷新画布预览
@@ -2045,7 +2307,11 @@ class MainWindow(tk.Tk):
                 'enabled': self.highlight_enabled_var.get() if hasattr(self, 'highlight_enabled_var') else False,
                 'keywords': keywords,
                 'color': self.highlight_color_var.get() if hasattr(self, 'highlight_color_var') else '#FFB7B2'
-            }
+            },
+            bold=self.text_bold_var.get() if hasattr(self, 'text_bold_var') else False,
+            italic=self.text_italic_var.get() if hasattr(self, 'text_italic_var') else False,
+            underline=self.text_underline_var.get() if hasattr(self, 'text_underline_var') else False,
+            indent=self.text_indent_var.get() if hasattr(self, 'text_indent_var') else True
         )
         
         self.text_layers = [text_layer]  # 目前只支持一个文字层
@@ -2218,32 +2484,38 @@ class MainWindow(tk.Tk):
         text_dir_frame.pack(fill=tk.X, padx=12, pady=(0, 12))
         
         # 启用文字目录勾选框
-        text_dir_check = tk.Checkbutton(text_dir_frame, text='从 .txt 文件读取文字', variable=self.batch_use_text_dir,
+        text_dir_check = tk.Checkbutton(text_dir_frame, text='启用批量配文', variable=self.batch_use_text_dir,
                       bg=COLORS['panel_bg'], fg=COLORS['text_primary'], font=('SF Pro Text', 10),
                       selectcolor=COLORS['accent'], activebackground=COLORS['panel_bg'])
         text_dir_check.pack(anchor='w')
-        Tooltip(text_dir_check, '选择一个 .txt 文件，其内容将应用于所有批量处理的图片')
+        Tooltip(text_dir_check, '勾选后将尝试为每张图片添加文字 (源自Excel文件)；若未找到对应文字，则使用当前编辑器内容')
         
         # 文字目录选择
         text_dir_select_frame = tk.Frame(text_dir_frame, bg=COLORS['panel_bg'])
         text_dir_select_frame.pack(fill=tk.X, pady=(4, 0))
         
-        text_dir_btn = tk.Label(text_dir_select_frame, text='选择文字目录', font=('SF Pro Text', 10),
+        text_dir_btn = tk.Label(text_dir_select_frame, text='选择 Excel 数据表', font=('SF Pro Text', 10),
                                bg=COLORS['bg_tertiary'], fg=COLORS['text_primary'], padx=8, pady=4, cursor='hand2')
         text_dir_btn.pack(side=tk.LEFT)
-        text_dir_btn.bind('<Button-1>', lambda e: self.select_text_dir())
+        text_dir_btn.bind('<Button-1>', lambda e: self.select_excel_file())
+        
+        # 模板下载按钮
+        template_btn = tk.Label(text_dir_select_frame, text='下载模版', font=('SF Pro Text', 10),
+                               bg=COLORS['bg_tertiary'], fg=COLORS['accent'], padx=8, pady=4, cursor='hand2')
+        template_btn.pack(side=tk.LEFT, padx=(4, 0))
+        template_btn.bind('<Button-1>', lambda e: self.download_excel_template())
         
         text_open_btn = tk.Label(text_dir_select_frame, text='打开', font=('SF Pro Text', 10),
                                 bg=COLORS['bg_tertiary'], fg=COLORS['text_primary'], padx=8, pady=4, cursor='hand2')
         text_open_btn.pack(side=tk.LEFT, padx=(4, 0))
         text_open_btn.bind('<Button-1>', lambda e: self.open_directory(self.batch_text_dir))
         
-        self.text_dir_label = tk.Label(text_dir_frame, text=self.batch_text_dir or '未设置',
+        self.text_dir_label = tk.Label(text_dir_frame, text=os.path.basename(self.batch_text_dir) if self.batch_text_dir else '未选择文件',
                                        font=('SF Pro Text', 9), bg=COLORS['bg_secondary'],
                                        fg=COLORS['text_secondary'], anchor='w', padx=8, pady=4)
         self.text_dir_label.pack(fill=tk.X, pady=(4, 0))
         
-        tk.Label(text_dir_frame, text='提示: 文件名需与图片对应，如 image1.txt',
+        tk.Label(text_dir_frame, text='提示: 使用模版配置文案，程序将自动更新读取时间',
                 font=('SF Pro Text', 8), bg=COLORS['panel_bg'], fg=COLORS['text_tertiary']
                 ).pack(anchor='w', pady=(4, 0))
 
@@ -2267,9 +2539,20 @@ class MainWindow(tk.Tk):
                       ).grid(row=0, column=1, sticky='w', padx=0)
                       
         tk.Checkbutton(random_frame, text='随机边框图案', variable=self.batch_random_pattern,
-                      bg=COLORS['panel_bg'], fg=COLORS['text_primary'], font=('SF Pro Text', 10),
-                      selectcolor=COLORS['bg_secondary'], activebackground=COLORS['panel_bg']
-                      ).grid(row=1, column=0, columnspan=2, sticky='w', pady=(5, 0))
+                       bg=COLORS['panel_bg'], fg=COLORS['text_primary'], font=('SF Pro Text', 10),
+                       selectcolor=COLORS['bg_secondary'], activebackground=COLORS['panel_bg']
+                       ).grid(row=1, column=0, columnspan=2, sticky='w', pady=(5, 0))
+
+        tk.Checkbutton(random_frame, text='随机文字高亮', variable=self.batch_random_highlight,
+                       bg=COLORS['panel_bg'], fg=COLORS['text_primary'], font=('SF Pro Text', 10),
+                       selectcolor=COLORS['bg_secondary'], activebackground=COLORS['panel_bg']
+                       ).grid(row=1, column=1, sticky='w', pady=(5, 0))
+
+        tk.Checkbutton(random_frame, text='随机字体样式', variable=self.batch_random_font_style,
+                       bg=COLORS['panel_bg'], fg=COLORS['text_primary'], font=('SF Pro Text', 10),
+                       selectcolor=COLORS['bg_secondary'], activebackground=COLORS['panel_bg']
+                       ).grid(row=2, column=0, columnspan=2, sticky='w', pady=(5, 0))
+
         
         # 5. 批量导出按钮
         batch_export_btn = tk.Label(
@@ -2770,6 +3053,9 @@ class MainWindow(tk.Tk):
                         font = ImageFont.load_default()
                     sticker_draw.text((scaled_x, scaled_y), sticker['text'], fill='black', font=font, anchor="mm")
             
+            # 4.5 绘制文字层 (NEW)
+
+            
             # 5. 绘制边框 (在最上层)
             from image_processor import CompositeImage
             
@@ -2800,6 +3086,26 @@ class MainWindow(tk.Tk):
                 print(f"[DEBUG] Border applied successfully")
             else:
                 print(f"[DEBUG] Skipping border - width={border_config.get('width')}")
+
+            # 6. 绘制文字层 (Moved to be AFTER border to avoid being covered)
+            if hasattr(self, 'current_text_layer') and self.current_text_layer:
+                # 使用 x 轴缩放比例 (假设文字随宽度缩放)
+                text_scale = scale_x
+                
+                # 渲染文字到独立图层
+                print(f"[DEBUG] Exporting text layer: {self.current_text_layer.content[:10]}..., scale={text_scale}")
+                text_img, tx, ty = self.current_text_layer.render(preset_width, preset_height, scale=text_scale)
+                
+                if text_img:
+                    # 合成到最终图片
+                    if final_img.mode != 'RGBA':
+                        final_img = final_img.convert('RGBA')
+                    
+                    # 确保 text_img 也是 RGBA
+                    if text_img.mode != 'RGBA':
+                        text_img = text_img.convert('RGBA')
+                        
+                    final_img.paste(text_img, (tx, ty), text_img)
             
             # 6. 保存
             try:
@@ -2811,7 +3117,13 @@ class MainWindow(tk.Tk):
                     self.save_preset_theme(silent=True)
                     save_msg += '\n\n✓ 主题预设已自动保存'
                 
-                messagebox.showinfo('成功', save_msg)
+                # 询问是否打开目录
+                if messagebox.askyesno('导出成功', save_msg + '\n\n是否打开所在目录？'):
+                    try:
+                        folder_path = os.path.dirname(file_path)
+                        self.open_directory(folder_path, select_file=file_path)
+                    except Exception as e:
+                        print(f"打开目录失败: {e}")
             except Exception as e:
                 messagebox.showerror('错误', f'保存失败: {e}')
     
@@ -2831,13 +3143,49 @@ class MainWindow(tk.Tk):
             self.output_dir_label.config(text=dir_path)
             self.save_settings()
     
-    def select_text_dir(self):
-        """选择文字目录"""
-        dir_path = filedialog.askdirectory(title='选择文字目录 (包含 .txt 文件)', initialdir=self.batch_text_dir or None)
-        if dir_path:
-            self.batch_text_dir = dir_path
+    def download_excel_template(self):
+        """下载 Excel 模板"""
+        template_source = os.path.join('assets', 'template', '批量导出文字内容模版.xlsx')
+        if not os.path.exists(template_source):
+             messagebox.showerror('错误', '找不到模板文件！')
+             return
+
+        save_path = filedialog.asksaveasfilename(
+            title='保存模板',
+            initialfile='批量导出文字内容模版.xlsx',
+            defaultextension='.xlsx',
+            filetypes=[('Excel 文件', '*.xlsx')]
+        )
+        if save_path:
+            try:
+                import shutil
+                shutil.copy2(template_source, save_path)
+                messagebox.showinfo('成功', f'模板已保存到:\n{save_path}')
+                
+                # 询问是否立即打开
+                if messagebox.askyesno('提示', '是否立即打开模板文件？'):
+                    # 尝试打开文件
+                    if sys.platform == 'darwin':
+                        subprocess.run(['open', save_path])
+                    elif sys.platform == 'win32':
+                        os.startfile(save_path)
+                    else:
+                        subprocess.run(['xdg-open', save_path])
+                        
+            except Exception as e:
+                messagebox.showerror('错误', f'保存模板失败: {e}')
+
+    def select_excel_file(self):
+        """选择 Excel 文件"""
+        file_path = filedialog.askopenfilename(
+            title='选择 Excel 数据表',
+            filetypes=[('Excel 文件', '*.xlsx'), ('Excel 97-2003', '*.xls')],
+            initialdir=os.path.dirname(self.batch_text_dir) if self.batch_text_dir else None
+        )
+        if file_path:
+            self.batch_text_dir = file_path 
             if hasattr(self, 'text_dir_label'):
-                self.text_dir_label.config(text=dir_path)
+                self.text_dir_label.config(text=os.path.basename(file_path))
             self.save_settings()
     
     def show_toast(self, message, duration=2000):
@@ -2933,10 +3281,10 @@ class MainWindow(tk.Tk):
             messagebox.showinfo('成功', f'已选择 {len(self.batch_images)} 张图片')
     
     def get_random_color(self):
-        """随机获取颜色"""
+        """随机获取颜色 (马卡龙 + 多巴胺色系)"""
         import random
-        from constants import PRESET_COLORS
-        return random.choice(PRESET_COLORS)
+        from constants import MACARON_COLORS, DOPAMINE_COLORS
+        return random.choice(MACARON_COLORS + DOPAMINE_COLORS)
 
     def get_random_line_style(self):
         """随机获取线条样式"""
@@ -2953,10 +3301,10 @@ class MainWindow(tk.Tk):
         return random.choice(patterns) if patterns else 'dots'
 
 
-    def open_directory(self, path):
-        """打开目录 (跨平台)"""
-        if not path or not os.path.exists(path):
-            messagebox.showwarning('提示', '目录不存在')
+    def open_directory(self, path, select_file=None):
+        """打开目录，支持选中文件"""
+        if not os.path.exists(path):
+            self.show_toast(f"目录不存在: {path}")
             return
             
         import platform
@@ -2965,14 +3313,107 @@ class MainWindow(tk.Tk):
         system = platform.system()
         try:
             if system == 'Darwin':  # macOS
-                subprocess.run(['open', path])
+                if select_file and os.path.exists(select_file):
+                    subprocess.run(['open', '-R', select_file])
+                else:
+                    subprocess.run(['open', path])
             elif system == 'Windows':  # Windows
-                os.startfile(path)
+                if select_file and os.path.exists(select_file):
+                    subprocess.run(['explorer', '/select,', os.path.normpath(select_file)])
+                else:
+                    os.startfile(path)
             else:  # Linux
                 subprocess.run(['xdg-open', path])
         except Exception as e:
-            print(f"打开目录失败: {e}")
+            self.show_toast(f"无法打开目录: {e}")
+            print(f"Open directory error: {e}")
             messagebox.showerror('错误', f'无法打开目录: {e}')
+
+    def _load_text_mapping(self, source_path):
+        """加载文字映射 (仅 Excel)，并回写更新时间"""
+        mapping = {}
+        sequential_list = []
+        
+        if not source_path or not os.path.isfile(source_path):
+            return None, []
+            
+        # Excel 模式
+        try:
+            import openpyxl
+            from datetime import datetime
+            
+            # 必须用 load_workbook 加载，不能只读，因为要回写
+            wb = openpyxl.load_workbook(source_path, data_only=False)
+            ws = wb.active
+            
+            # 标记是否有修改
+            has_update = False
+            current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            
+            # 遍历所有行 (跳过 header? 假设第一行可能是 Header)
+            # 为了确保准确，我们读取所有行，但通常第一行是标题。
+            # 如果第一行是 "文件名" "内容"，我们一般跳过。
+            # 简单策略：遍历所有，如果匹配特定特征才处理
+            
+            rows = list(ws.iter_rows(min_row=1)) # 获取所有行对象
+            
+            for row_idx, row in enumerate(rows):
+                # 获取值 (注意: row是单元格对象，不是值，因为 data_only=False)
+                # 使用 value 属性
+                val1 = row[0].value
+                val2 = row[1].value if len(row) > 1 else None
+                
+                col1 = str(val1).strip() if val1 is not None else ""
+                col2 = str(val2).strip() if val2 is not None else ""
+                
+                # 跳过空行
+                if not col1 and not col2:
+                    continue
+                    
+                # 检查是否是标题行 (简单的关键词检查)
+                if row_idx == 0:
+                     if '文件名' in col1 or '内容' in col2 or 'Filename' in col1:
+                         # 这里的标题行可以写入 "更新时间" 到第三列
+                         if len(row) > 2:
+                             row[2].value = "最后读取时间"
+                             has_update = True
+                         else:
+                             # 只有两列，无法写标题到第三列? openpyxl 会自动扩展吗？可以
+                             ws.cell(row=row_idx+1, column=3, value="最后读取时间")
+                             has_update = True
+                         continue
+
+                # 提取数据
+                content = ""
+                # 逻辑复用：
+                if '.' in col1 and len(col1) > 3:
+                     # A=Filename, B=Content
+                     content = col2
+                     mapping[col1] = content
+                else:
+                     # Sequence
+                     content = col2 if col2 else col1
+                     sequential_list.append(content)
+                
+                # 回写时间到第3列 (Column C)
+                # 只有当确实读取了这一行数据时才写
+                if content:
+                    ws.cell(row=row_idx+1, column=3, value=current_time)
+                    has_update = True
+
+            if has_update:
+                try:
+                    wb.save(source_path)
+                    print(f"[INFO] 已更新 Excel 时间戳: {source_path}")
+                except Exception as e:
+                    print(f"[ERROR] 无法回写 Excel: {e} (可能文件被占用)")
+                    self.show_toast(f"无法更新Excel时间: 文件被占用?")
+                    
+        except Exception as e:
+            print(f"读取 Excel 失败: {e}")
+            self.show_toast(f"读取 Excel 失败: {e}")
+                
+        return mapping, sequential_list
 
     def batch_export(self):
         """批量导出图片"""
@@ -2996,6 +3437,14 @@ class MainWindow(tk.Tk):
         # 确定要处理的图片列表
         # 如果 force_reprocess (batch_regenerate_all) 为 True，则处理所有图片
         # 否则只处理输出目录中不存在的图片
+        # [AUTH] 检查授权状态 (批量导出前)
+        # [AUTH] 检查授权状态 (批量导出前)
+        auth_status = auth.get_status()
+        if auth_status['status'] == 'limited':
+            messagebox.showwarning("额度用完", f"无法导出：{auth_status['msg']}\n请激活软件解除限制。")
+            self.show_activation_dialog()
+            return
+            
         force_reprocess = self.batch_regenerate_all.get()
         images_to_process = []
         
@@ -3038,6 +3487,16 @@ class MainWindow(tk.Tk):
         
         # 记录本次会话处理数
         self.current_session_processed = 0
+        
+        # [EXCEL] 预加载文字映射
+        text_mapping = {}
+        text_sequence = []
+        if self.batch_use_text_dir.get() and self.batch_text_dir:
+            text_mapping, text_sequence = self._load_text_mapping(self.batch_text_dir)
+            if text_mapping:
+                self.batch_log(f"已加载 Excel 映射: {len(text_mapping)} 条记录")
+            if text_sequence:
+                self.batch_log(f"已加载 Excel 列表: {len(text_sequence)} 条记录 (及 {len(text_mapping)} 条指定映射)")
         
         for idx, img_path in enumerate(images_to_process):
             filename = os.path.basename(img_path)
@@ -3214,58 +3673,177 @@ class MainWindow(tk.Tk):
                 # 6. 添加文字层
                 text_content = None
                 
-                # 方式1: 从文本目录读取对应的 .txt 文件
-                if self.batch_use_text_dir.get() and self.batch_text_dir:
-                    base_name = os.path.splitext(filename)[0]
-                    txt_path = os.path.join(self.batch_text_dir, base_name + '.txt')
+                # 获取当前编辑器中的文字内容作为基础/兜底
+                editor_content = None
+                if hasattr(self, 'current_text_layer') and self.current_text_layer:
+                    editor_content = self.current_text_layer.content
+
+                # 只要勾选了"批量文字" (batch_use_text_dir)，就尝试添加文字
+                # 逻辑：Excel映射 -> Excel顺序 -> .txt 文件 -> default.txt -> 编辑器文字
+                if self.batch_use_text_dir.get():
                     
-                    if os.path.exists(txt_path):
-                        try:
-                            with open(txt_path, 'r', encoding='utf-8') as f:
-                                text_content = f.read().strip()
-                            self.batch_log(f"  文字: 从 {base_name}.txt 读取")
-                        except Exception as e:
-                            self.batch_log(f"  文字: 读取失败 - {e}")
-                    else:
-                        # 尝试 default.txt
-                        default_txt = os.path.join(self.batch_text_dir, 'default.txt')
-                        if os.path.exists(default_txt):
-                            try:
-                                with open(default_txt, 'r', encoding='utf-8') as f:
-                                    text_content = f.read().strip()
-                                self.batch_log(f"  文字: 使用 default.txt")
-                            except:
-                                pass
-                
-                # 方式2: 使用编辑器中的文字配置 (如果没有从文件读取)
-                elif self.text_layers and len(self.text_layers) > 0:
-                    text_layer = self.text_layers[0]
-                    text_content = text_layer.content
-                    if text_content:
+                    # 1. 尝试 Excel/列表 映射
+                    if text_mapping and filename in text_mapping:
+                        text_content = text_mapping[filename]
+                        self.batch_log(f"  文字: Excel 匹配 ({filename})")
+                    elif text_sequence and idx < len(text_sequence):
+                        text_content = text_sequence[idx]
+                        self.batch_log(f"  文字: Excel 顺序 (第{idx+1}行)")
+                    
+                    # 2. 尝试从文件读取 (目录模式 - 已移除)
+                    # elif self.batch_text_dir and os.path.isdir(self.batch_text_dir):
+                    #    pass
+                    
+                    # 3. Fallback: 使用编辑器文字
+                    if not text_content and editor_content:
+                        text_content = editor_content
                         self.batch_log(f"  文字: 使用编辑器配置")
                 
                 # 应用文字层
                 if text_content:
                     from image_processor import TextLayer
-                    text_layer = TextLayer(
-                        content=text_content,
-                        font_size=self.current_text_config.get('font_size', 48),
-                        color=self.current_text_config.get('color', '#FFFFFF'),
-                        font_family=self.current_text_config.get('font_family', 'pingfang'),
-                        align=self.current_text_config.get('align', 'center'),
-                        position=self.current_text_config.get('position', 'bottom'),
-                        margin=self.current_text_config.get('margin', 20),
-                        shadow=self.current_text_config.get('shadow'),
-                        stroke=self.current_text_config.get('stroke'),
-                    )
-                    composite.add_text_layer(text_layer, scale=preview_scale)
+                    text_layer = None
+                    
+                    # 优先克隆当前图层 (保证样式完全一致)
+                    if hasattr(self, 'current_text_layer') and self.current_text_layer:
+                        # 使用 to_dict/from_dict 克隆
+                        layer_data = self.current_text_layer.to_dict()
+                        # 更新内容
+                        layer_data['content'] = text_content
+                        text_layer = TextLayer.from_dict(layer_data)
+                    else:
+                        # Fallback: 使用 Config 创建 (可能样式不全)
+                        cfg = self.current_text_config
+                        text_layer = TextLayer(
+                            content=text_content,
+                            font_size=cfg.get('font_size', 48),
+                            color=cfg.get('color', '#FFFFFF'),
+                            font_family=cfg.get('font_family', 'pingfang'),
+                            align=cfg.get('align', 'center'),
+                            position=cfg.get('position', 'bottom'),
+                            margin=cfg.get('margin', 20),
+                            shadow=cfg.get('shadow'),
+                            stroke=cfg.get('stroke'),
+                            highlight=cfg.get('highlight'),
+                            bold=cfg.get('bold', False),
+                            italic=cfg.get('italic', False),
+                            underline=cfg.get('underline', False),
+                            indent=cfg.get('indent', False)
+                        )
+
+                    # [RANDOM FONT] 随机字体样式
+                    if self.batch_random_font_style.get():
+                        import random
+                        from constants import RANDOM_FONTS
+                        text_layer.font_family = random.choice(RANDOM_FONTS)
+                        text_layer.bold = random.choice([True, False])
+                        text_layer.italic = random.choice([True, False])
+                        # [RANDOM COLOR] 随机字体颜色
+                        from constants import MACARON_COLORS, DOPAMINE_COLORS
+                        all_colors = MACARON_COLORS + DOPAMINE_COLORS
+                        text_layer.color = random.choice(all_colors)
+                        
+                        # [RANDOM STROKE] 如果启用了描边，随机描边颜色并确保对比度
+                        if text_layer.stroke and text_layer.stroke.get('enabled'):
+                            # 解析文字颜色亮度
+                            try:
+                                c = str(text_layer.color).lstrip('#')
+                                if len(c) == 6:
+                                    rgb = tuple(int(c[i:i+2], 16) for i in (0, 2, 4))
+                                    brightness = (rgb[0] * 299 + rgb[1] * 587 + rgb[2] * 114) / 1000
+                                else:
+                                    brightness = 200 # 默认为亮色 (马卡龙/多巴胺多为亮色)
+                            except:
+                                brightness = 200
+                            
+                            if brightness > 140: # 稍微提高阈值，偏向认为它是亮色
+                                # 文字亮 -> 描边深
+                                dark_strokes = ['#000000', '#333333', '#1A1A1A', '#2F4F4F', '#8B4513', '#800000', '#191970', '#006400']
+                                text_layer.stroke['color'] = random.choice(dark_strokes)
+                            else:
+                                # 文字暗 -> 描边亮
+                                light_strokes = ['#FFFFFF', '#F0F8FF', '#F5F5F5', '#FFFACD', '#E0FFFF', '#FFC0CB', '#98FB98']
+                                text_layer.stroke['color'] = random.choice(light_strokes)
+                        
+                    # [RANDOM HIGHLIGHT] 随机文字高亮 (配合 NLP)
+                    if self.batch_random_highlight.get():
+                         random_hl_color = self.get_random_color()
+                         
+                         # 1. 确保 highlight 结构存在
+                         if not text_layer.highlight or isinstance(text_layer.highlight, bool):
+                             text_layer.highlight = {'enabled': True, 'keywords': [], 'color': random_hl_color}
+                         else:
+                             text_layer.highlight['enabled'] = True
+                             text_layer.highlight['color'] = random_hl_color
+                         
+                             text_layer.highlight['enabled'] = True
+                             text_layer.highlight['color'] = random_hl_color
+                         
+                         # [NLP] always try NLP first
+                         try:
+                             import jieba.analyse
+                             curr_text = text_layer.content
+                             # 提取 Top 5
+                             extracted = jieba.analyse.extract_tags(curr_text, topK=5)
+                             if extracted:
+                                 text_layer.highlight['keywords'] = extracted
+                                 log_details.append(f"NLP关键词: {extracted}")
+                         except ImportError:
+                             pass
+                         except Exception as e:
+                             print(f"Jieba failed: {e}")
+                         
+                         current_keywords = text_layer.highlight.get('keywords', [])
+                         if not current_keywords:
+                             # 简单的正则: 提取长度 >= 2 的词 (中文或单词)
+                             import re
+                             # 匹配中文或英文单词
+                             words = re.findall(r'[\u4e00-\u9fa5]{2,}|[a-zA-Z]{4,}', text_content)
+                             if words:
+                                 # 随机选几个
+                                 import random
+                                 count = min(3, len(words))
+                                 fallback_keywords = random.sample(words, count)
+                                 text_layer.highlight['keywords'] = fallback_keywords
+                                 log_details.append(f"正则兜底: {fallback_keywords}")
+                         
+                         log_details.append(f"随机高亮: {random_hl_color}")
+                        
+                    # 计算有效边框宽度 (用于文字防遮挡)
+                    effective_border_width = 0
+                    if composite and composite.width and border_config and border_config.get('id') != 'none':
+                         # 边框宽度已经包含了 preview_scale (在 add_border 前处理过吗？)
+                         # batch_export 开始处：border_config['width'] = int(border_config['width'] * preview_scale)
+                         # 所以这里直接取
+                         effective_border_width = border_config.get('width', 0)
+                         # 稍微多给一点余量
+                         effective_border_width += int(10 * preview_scale)
+
+                    composite.add_text_layer(text_layer, scale=preview_scale, border_width=effective_border_width)
                 
                 # 7. 保存
-                save_path = os.path.join(output_dir, filename)
+                # [UNIQUE] 生成唯一文件名 (时间戳 + 随机数)防止覆盖
+                import time
+                import random
+                from datetime import datetime
+                name, ext = os.path.splitext(filename)
+                # 格式: 原文件名_年月日时分秒毫秒
+                time_str = datetime.now().strftime('%Y%m%d%H%M%S%f')[:-3]
+                unique_filename = f"{name}_{time_str}{ext}"
+                
+                save_path = os.path.join(output_dir, unique_filename)
                 if composite.save(save_path):
-                    self.batch_log(f"  └─ 成功: {filename}")
+                    self.batch_log(f"  └─ 成功: {unique_filename}")
                     success_count += 1
                     self.current_session_processed += 1
+                    
+                    # [AUTH] 扣除使用次数
+                    # [AUTH] 扣除使用次数
+                    allowed, msg = auth.increment_usage(1)
+                    if not allowed:
+                        self.batch_log(f"  [STOP] {msg}")
+                        messagebox.showwarning("限制提示", msg)
+                        break
                 else:
                     self.batch_log(f"  └─ 失败: 保存出错")
             
@@ -3277,13 +3855,15 @@ class MainWindow(tk.Tk):
         self.batch_log(f"═══ 处理完成 ═══")
         self.batch_log(f"成功: {success_count} / {len(images_to_process)}")
         self.update_batch_status_text()
-        messagebox.showinfo('完成', f'批量处理完成！\n成功: {success_count}\n失败: {len(images_to_process) - success_count}')
+        if messagebox.askyesno('完成', f'批量处理完成！\n成功: {success_count}\n失败: {len(images_to_process) - success_count}\n\n是否打开所在目录？'):
+            self.open_directory(output_dir)
 
     def save_history(self, action_name="操作"):
         """保存历史记录"""
         import copy
         from datetime import datetime
         
+        # 创建状态快照
         # 创建状态快照
         state = {
             'timestamp': datetime.now().strftime('%H:%M:%S'),
@@ -3294,7 +3874,25 @@ class MainWindow(tk.Tk):
             'background_pattern_color': self.background_pattern_color,
             'background_pattern_size': self.background_pattern_size,
             'image': self.image_processor.current_image.copy() if self.image_processor.current_image else None,
-            'stickers': copy.deepcopy(self.canvas_widget.stickers) if hasattr(self.canvas_widget, 'stickers') else []
+            'stickers': copy.deepcopy(self.canvas_widget.stickers) if hasattr(self.canvas_widget, 'stickers') else [],
+            # 保存文字配置
+            'text_config': {
+                'content': self.text_content_entry.get('1.0', 'end-1c') if hasattr(self, 'text_content_entry') else '',
+                'color': self.text_color_var.get() if hasattr(self, 'text_color_var') else '#333333',
+                'font_family': self.font_family_var.get() if hasattr(self, 'font_family_var') else '苹方 (默认)',
+                'font_size': self.font_size_scale.get() if hasattr(self, 'font_size_scale') else 48,
+                'align': self.text_align_var.get() if hasattr(self, 'text_align_var') else 'center',
+                'position': self.text_position_var.get() if hasattr(self, 'text_position_var') else 'bottom',
+                'margin': self.text_margin_var.get() if hasattr(self, 'text_margin_var') else 20,
+                'bold': self.text_bold_var.get() if hasattr(self, 'text_bold_var') else False,
+                'italic': self.text_italic_var.get() if hasattr(self, 'text_italic_var') else False,
+                'underline': self.text_underline_var.get() if hasattr(self, 'text_underline_var') else False,
+                'shadow_enabled': self.text_shadow_var.get() if hasattr(self, 'text_shadow_var') else False,
+                'stroke_enabled': self.text_stroke_var.get() if hasattr(self, 'text_stroke_var') else False,
+                'stroke_width': self.stroke_width_var.get() if hasattr(self, 'stroke_width_var') else 2,
+                'stroke_color': self.stroke_color_var.get() if hasattr(self, 'stroke_color_var') else '#000000',
+                'highlight_enabled': self.highlight_enabled_var.get() if hasattr(self, 'highlight_enabled_var') else True
+            }
         }
         
         # 如果不是在历史末尾，删除后面的记录
@@ -3377,6 +3975,33 @@ class MainWindow(tk.Tk):
         
         # 刷新画布
         self.refresh_canvas()
+        
+        # 恢复文字配置
+        if 'text_config' in state:
+            tc = state['text_config']
+            
+            # 恢复UI变量
+            if hasattr(self, 'text_content_entry'):
+                self.text_content_entry.delete('1.0', tk.END)
+                self.text_content_entry.insert('1.0', tc.get('content', ''))
+                
+            if hasattr(self, 'text_color_var'): self.text_color_var.set(tc.get('color', '#333333'))
+            if hasattr(self, 'font_family_var'): self.font_family_var.set(tc.get('font_family', ''))
+            if hasattr(self, 'font_size_scale'): self.font_size_scale.set(tc.get('font_size', 48))
+            if hasattr(self, 'text_align_var'): self.text_align_var.set(tc.get('align', 'center'))
+            if hasattr(self, 'text_position_var'): self.text_position_var.set(tc.get('position', 'bottom'))
+            if hasattr(self, 'text_margin_var'): self.text_margin_var.set(tc.get('margin', 20))
+            if hasattr(self, 'text_bold_var'): self.text_bold_var.set(tc.get('bold', False))
+            if hasattr(self, 'text_italic_var'): self.text_italic_var.set(tc.get('italic', False))
+            if hasattr(self, 'text_underline_var'): self.text_underline_var.set(tc.get('underline', False))
+            if hasattr(self, 'text_shadow_var'): self.text_shadow_var.set(tc.get('shadow_enabled', False))
+            if hasattr(self, 'text_stroke_var'): self.text_stroke_var.set(tc.get('stroke_enabled', False))
+            if hasattr(self, 'stroke_width_var'): self.stroke_width_var.set(tc.get('stroke_width', 2))
+            if hasattr(self, 'stroke_color_var'): self.stroke_color_var.set(tc.get('stroke_color', '#000000'))
+            if hasattr(self, 'highlight_enabled_var'): self.highlight_enabled_var.set(tc.get('highlight_enabled', True))
+            
+            # 触发重新渲染文字
+            self._auto_apply_text()
     
     def restore_to_history(self, index):
         """恢复到指定历史记录"""
@@ -3457,12 +4082,15 @@ class MainWindow(tk.Tk):
         self.history_listbox.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
         
         # 绑定点击事件
-        self.history_listbox.bind('<ButtonRelease-1>', lambda e: self.restore_history_from_list())
+        self.history_listbox.bind('<ButtonRelease-1>', self.on_history_select)
         
         # 滚动条
         scrollbar = tk.Scrollbar(list_frame, command=self.history_listbox.yview)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         self.history_listbox.config(yscrollcommand=scrollbar.set)
+        
+        # 初始化显示
+        self.update_history_display()
     
     def on_history_select(self, event):
         """历史记录选择事件"""
@@ -4557,7 +5185,8 @@ class MainWindow(tk.Tk):
             self.preset_themes.append(state)
         else:
             self.preset_themes.append(state)
-        
+            
+        self.save_settings() # 保存设置 (包含预设)
         self.update_preset_theme_display()
         self.update_left_preset_display()
         

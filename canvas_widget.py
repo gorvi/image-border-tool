@@ -1110,8 +1110,13 @@ class CanvasWidget(tk.Frame):
             align=config.get('align', 'center'),
             position=config.get('position', 'bottom'),
             margin=config.get('margin', 20),
+            indent=config.get('indent', False),
             shadow=config.get('shadow'),
             stroke=config.get('stroke'),
+            highlight=config.get('highlight'),
+            bold=config.get('bold', False),
+            italic=config.get('italic', False),
+            underline=config.get('underline', False)
         )
         
         self.set_text_layer(text_layer)
