@@ -154,7 +154,7 @@ class MainWindow(tk.Tk):
         self.batch_input_dir = ''  # 输入目录
         self.batch_output_dir = ''  # 输出目录
         self.processed_images = set()  # 已处理的图片集合
-        self.batch_regenerate_all = tk.BooleanVar(value=False)  # 强制重新处理 (覆盖)
+        # self.batch_regenerate_all = tk.BooleanVar(value=False) # 已废弃
         
         # 批量随机化选项
         # 批量随机化选项
@@ -2108,18 +2108,43 @@ class MainWindow(tk.Tk):
         # 预览时不写入 ImageProcessor，而是作为独立 Item 添加到 Canvas
         self.image_processor.clear_text_layers()
         
-        # 渲染文字图片
+        # [WYSIWYG FIX] 预览应该模拟导出尺寸，然后缩小显示
+        # 直接使用当前选中的预设对象，确保与导出逻辑一致
+        preset_width = self.current_size_preset['width']
+        preset_height = self.current_size_preset['height']
+        
+        # 画布显示尺寸
         cw = self.canvas_widget.width if self.canvas_widget.width > 10 else 800
         ch = self.canvas_widget.height if self.canvas_widget.height > 10 else 600
         
+        # 计算从画布到导出的缩放比例 (和 batch_export 相同)
+        preview_scale = preset_width / cw if cw > 0 else 1.0
+        
+        # 计算导出尺寸下的边框宽度
+        export_border_width = 0
+        if hasattr(self, 'border_config') and self.border_config.get('id') != 'none':
+            export_border_width = int(self.border_config.get('width', 0) * preview_scale)
+            export_border_width += int(10 * preview_scale)  # 额外边距
+            
+        print(f"[DEBUG] PREVIEW: border_width_raw={self.border_config.get('width')}, export_border_width={export_border_width}")
+        
         # 强制刷新关键词 (如果是高亮模式且关键词为空)
         if self.highlight_enabled_var.get() and not self._auto_keywords:
-             # 这里不调用检测以免死循环，只取当前文本
              pass
-             
-        text_img, x, y = text_layer.render(cw, ch)
+        
+        # [关键] 使用导出尺寸渲染，和导出时完全一致
+        text_img, x, y = text_layer.render(preset_width, preset_height, scale=preview_scale, safe_margin_x=export_border_width)
         
         if text_img:
+            # 缩小回预览尺寸
+            display_scale = cw / preset_width
+            new_w = int(text_img.width * display_scale)
+            new_h = int(text_img.height * display_scale)
+            if new_w > 0 and new_h > 0:
+                from PIL import Image
+                text_img = text_img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+                x = int(x * display_scale)
+                y = int(y * display_scale)
             self.canvas_widget.add_text_layer_item(text_img, x, y)
     
     def on_text_transform(self, action, **kwargs):
@@ -2454,17 +2479,7 @@ class MainWindow(tk.Tk):
         )
         self.batch_status_label.pack(fill=tk.X, pady=(2, 8))
         
-        # 全部重新生成勾选框
-        regen_check = tk.Checkbutton(
-            status_frame, text='强制重新处理 (覆盖文件)',
-            variable=self.batch_regenerate_all,
-            bg=COLORS['panel_bg'], fg=COLORS['accent'],
-            font=('SF Pro Text', 10, 'bold'), selectcolor=COLORS['bg_secondary'],
-            activebackground=COLORS['panel_bg'],
-            command=self.update_batch_status_text
-        )
-        regen_check.pack(anchor='w', pady=(0, 10))
-        Tooltip(regen_check, '勾选后会重新处理所有图片，包括已存在的输出文件')
+        # 已移除强制重新处理选项 (默认不覆盖，因文件名已唯一)
 
         # 参考示例位置选项
         match_canvas_check = tk.Checkbutton(
@@ -2613,10 +2628,8 @@ class MainWindow(tk.Tk):
         if not hasattr(self, 'batch_images') or not self.batch_images:
             return
             
-        if self.batch_regenerate_all.get():
-            pending = len(self.batch_images)
-        else:
-            pending = len([p for p in self.batch_images if os.path.basename(p) not in self.processed_images])
+        # Since we always process provided images (unique filenames), pending is just the total count
+        pending = len(self.batch_images)
             
         # 本次已处理保持不变，或者如果不希望跟“重新生成”状态挂钩也可以
         processed_text = getattr(self, 'current_session_processed', 0)
@@ -3088,13 +3101,21 @@ class MainWindow(tk.Tk):
                 print(f"[DEBUG] Skipping border - width={border_config.get('width')}")
 
             # 6. 绘制文字层 (Moved to be AFTER border to avoid being covered)
+            # 6. 绘制文字层 (Moved to be AFTER border to avoid being covered)
             if hasattr(self, 'current_text_layer') and self.current_text_layer:
                 # 使用 x 轴缩放比例 (假设文字随宽度缩放)
                 text_scale = scale_x
                 
+                # 计算有效边框宽度 (用于文字防遮挡)，与 batch_export 逻辑保持一致
+                effective_border_width = 0
+                if border_config.get('width', 0) > 0:
+                     effective_border_width = border_config.get('width', 0)
+                     # 稍微多给一点余量 (也要缩放)
+                     effective_border_width += int(10 * text_scale)
+                
                 # 渲染文字到独立图层
-                print(f"[DEBUG] Exporting text layer: {self.current_text_layer.content[:10]}..., scale={text_scale}")
-                text_img, tx, ty = self.current_text_layer.render(preset_width, preset_height, scale=text_scale)
+                print(f"[DEBUG] Exporting text layer: {self.current_text_layer.content[:10]}..., scale={text_scale}, safe_margin={effective_border_width}")
+                text_img, tx, ty = self.current_text_layer.render(preset_width, preset_height, scale=text_scale, safe_margin_x=effective_border_width)
                 
                 if text_img:
                     # 合成到最终图片
@@ -3285,6 +3306,12 @@ class MainWindow(tk.Tk):
         import random
         from constants import MACARON_COLORS, DOPAMINE_COLORS
         return random.choice(MACARON_COLORS + DOPAMINE_COLORS)
+    
+    def get_random_highlight_color(self):
+        """随机获取高亮颜色 (仅限亮色)"""
+        import random
+        from constants import BRIGHT_HIGHLIGHT_COLORS
+        return random.choice(BRIGHT_HIGHLIGHT_COLORS)
 
     def get_random_line_style(self):
         """随机获取线条样式"""
@@ -3435,40 +3462,9 @@ class MainWindow(tk.Tk):
             return
         
         # 确定要处理的图片列表
-        # 如果 force_reprocess (batch_regenerate_all) 为 True，则处理所有图片
-        # 否则只处理输出目录中不存在的图片
-        # [AUTH] 检查授权状态 (批量导出前)
-        # [AUTH] 检查授权状态 (批量导出前)
-        auth_status = auth.get_status()
-        if auth_status['status'] == 'limited':
-            messagebox.showwarning("额度用完", f"无法导出：{auth_status['msg']}\n请激活软件解除限制。")
-            self.show_activation_dialog()
-            return
-            
-        force_reprocess = self.batch_regenerate_all.get()
-        images_to_process = []
-        
-        if force_reprocess:
-            images_to_process = self.batch_images
-        else:
-            for img_path in self.batch_images:
-                filename = os.path.basename(img_path)
-                # 检查输出文件是否存在 (假设输出为 PNG/JPG，这里简化检查)
-                # 实际上由于可能转格式，名字可能变... 简单起见，如果同名文件存在(忽略扩展名差异?)
-                # 这里暂且假设输出文件名保持原名(或加前缀/后缀)，这里先简单根据文件名判断
-                # 更严谨的逻辑：
-                name, _ = os.path.splitext(filename)
-                # 预期输出路径
-                # 假设输出为原扩展名，或者统一PNG? save() 方法目前保留原扩展名（JPG转RGB）
-                # 我们检查目录下是否有以 name 开头的文件?
-                # 简单点：只检查完全匹配的文件名（如果 save 保持文件名）
-                target_path = os.path.join(output_dir, filename)
-                if not os.path.exists(target_path):
-                    images_to_process.append(img_path)
-        
-        if not images_to_process:
-            messagebox.showinfo('提示', '没有需要处理的新图片 (已跳过已存在的文件)')
-            return
+        # 始终处理所有选中的图片 (假设文件名唯一或自动重命名)
+        images_to_process = self.batch_images
+
         
         success_count = 0
         preset_width = self.current_size_preset['width']
@@ -3477,10 +3473,7 @@ class MainWindow(tk.Tk):
         # 开始日志
         self.batch_log(f"═══ 开始批量处理 ═══")
         self.batch_log(f"待处理: {len(images_to_process)} 张图片")
-        if force_reprocess:
-            self.batch_log("模式: 强制重新处理 (覆盖)")
-        else:
-            self.batch_log("模式: 跳过已存在")
+        self.batch_log("模式: 默认全量处理 (自动覆盖)")
             
         self.batch_log(f"输出目录: {output_dir}")
         self.batch_log(f"输出尺寸: {preset_width}x{preset_height}")
@@ -3528,6 +3521,14 @@ class MainWindow(tk.Tk):
                     # 自动调整图案大小
                     border_config['pattern_size'] = max(4, int(border_config['width'] * 0.6))
                 
+                
+                # [SCALE FIX] 提前计算分辨率缩放比例
+                # 所有的视觉元素（背景图案、边框宽度、文字大小）都需要基于预览比例进行缩放
+                display_width = self.canvas_widget.width
+                preview_scale = 1.0
+                if display_width > 0:
+                    preview_scale = preset_width / display_width
+
                 # 3. 生成复合图片 (背景)
                 composite = CompositeImage(
                     preset_width,
@@ -3535,11 +3536,12 @@ class MainWindow(tk.Tk):
                     bg_color=self.background_color
                 )
                 
-                # 绘制背景图案
+                # 绘制背景图案 (应用缩放)
+                scaled_pattern_size = int(self.background_pattern_size * preview_scale)
                 composite.draw_background_pattern(
                     self.background_pattern,
                     self.background_pattern_color,
-                    self.background_pattern_size
+                    scaled_pattern_size
                 )
                 
                 # [LOGGING] 记录参考参数
@@ -3609,23 +3611,16 @@ class MainWindow(tk.Tk):
 
                 # 5. 应用边框到复合图片
                 
-                # [SCALE FIX] 计算分辨率缩放比例
-                # 边框宽度是在画布上视觉调整的，导出时应随分辨率缩放
-                display_width = self.canvas_widget.width
-                preview_scale = 1.0
-                if display_width > 0:
-                    preview_scale = preset_width / display_width
-                
                 # 复制配置并应用缩放
                 scaled_border_config = border_config.copy()
                 if preview_scale != 1.0:
                     scaled_border_config['width'] = int(border_config.get('width', 0) * preview_scale)
                     scaled_border_config['radius'] = int(border_config.get('radius', 0) * preview_scale)
-                    scaled_border_config['pattern_size'] = int(border_config.get('pattern_size', 0) * preview_scale)
                     
-                    # 如果有随机化图案，pattern_size 已经在上面被覆盖了，这里重新缩放
-                    # 注意：上面代码中 random_pattern 设定了 pattern_size = int(width * 0.6)
-                    # 如果 random 逻辑修改了 width，这里也应该基于 scaled width
+                    # 只有在 random pattern 未覆盖时才缩放，或者统一缩放
+                    # 如果 random pattern 已经被设置为 width * 0.6，那 width 已经是原始的了，这里应该缩放
+                    # 但如果在 random 块里是用原始 width 计算的 size，那这里也要缩放 size
+                    scaled_border_config['pattern_size'] = int(border_config.get('pattern_size', 0) * preview_scale)
                     
                 # 根据形状判断调用哪个方法
                 if scaled_border_config.get('shape') in ('rounded_rect', 'circle', 'ellipse') or scaled_border_config.get('radius', 0) > 0:
@@ -3734,40 +3729,115 @@ class MainWindow(tk.Tk):
                     # [RANDOM FONT] 随机字体样式
                     if self.batch_random_font_style.get():
                         import random
-                        from constants import RANDOM_FONTS
-                        text_layer.font_family = random.choice(RANDOM_FONTS)
+                        # 使用与 UI 下拉框一致的字体列表 (keys: pingfang, heiti, etc.)
+                        valid_fonts = list(text_layer.FONT_NAMES.keys())
+                        text_layer.font_family = random.choice(valid_fonts)
                         text_layer.bold = random.choice([True, False])
                         text_layer.italic = random.choice([True, False])
                         # [RANDOM COLOR] 随机字体颜色
+                        # [RANDOM COLOR] 智能对比度配色
                         from constants import MACARON_COLORS, DOPAMINE_COLORS
                         all_colors = MACARON_COLORS + DOPAMINE_COLORS
-                        text_layer.color = random.choice(all_colors)
                         
-                        # [RANDOM STROKE] 如果启用了描边，随机描边颜色并确保对比度
+                        # 1. 计算背景亮度
+                        bg_brightness = 255 # 默认白背景
+                        try:
+                            # 尝试从 composite canvas 获取平均亮度 (简单采样)
+                            if composite and composite.canvas:
+                                # 缩略图采样
+                                thumb = composite.canvas.resize((50, 50))
+                                if thumb.mode != 'RGB':
+                                    thumb = thumb.convert('RGB')
+                                from PIL import ImageStat
+                                stat = ImageStat.Stat(thumb)
+                                r, g, b = stat.mean
+                                bg_brightness = (r * 299 + g * 587 + b * 114) / 1000
+                        except Exception as e:
+                            print(f"[DEBUG] Calc bg brightness failed: {e}")
+                            
+                        # 2. 根据背景亮度筛选文字颜色
+                        candidates = []
+                        if bg_brightness < 100: # 深色背景
+                            # 强制选亮色文字 (>150)
+                            for c in all_colors:
+                                try:
+                                    crgb = tuple(int(c.lstrip('#')[i:i+2], 16) for i in (0, 2, 4))
+                                    cb = (crgb[0] * 299 + crgb[1] * 587 + crgb[2] * 114) / 1000
+                                    if cb > 150: candidates.append(c)
+                                except: pass
+                            if not candidates: candidates = ['#FFFFFF'] # Fallback
+                        elif bg_brightness > 180: # 浅色背景
+                             # 倾向选深色文字 (<120)
+                             for c in all_colors:
+                                try:
+                                    crgb = tuple(int(c.lstrip('#')[i:i+2], 16) for i in (0, 2, 4))
+                                    cb = (crgb[0] * 299 + crgb[1] * 587 + crgb[2] * 114) / 1000
+                                    if cb < 120: candidates.append(c)
+                                except: pass
+                             # 如果没找到足够深的颜色，就随便选一个，但后面强制开描边
+                             if not candidates: candidates = all_colors
+                        else:
+                            # 中性背景，什么颜色都行，靠描边补救
+                            candidates = all_colors
+                            
+                        text_layer.color = random.choice(candidates)
+                        
+                        # 3. [RANDOM STROKE] 智能描边 (确保最终对比度)
                         if text_layer.stroke and text_layer.stroke.get('enabled'):
-                            # 解析文字颜色亮度
+                             # 计算选中文字颜色的亮度
                             try:
                                 c = str(text_layer.color).lstrip('#')
                                 if len(c) == 6:
                                     rgb = tuple(int(c[i:i+2], 16) for i in (0, 2, 4))
-                                    brightness = (rgb[0] * 299 + rgb[1] * 587 + rgb[2] * 114) / 1000
+                                    txt_brightness = (rgb[0] * 299 + rgb[1] * 587 + rgb[2] * 114) / 1000
                                 else:
-                                    brightness = 200 # 默认为亮色 (马卡龙/多巴胺多为亮色)
+                                    txt_brightness = 200
                             except:
-                                brightness = 200
+                                txt_brightness = 200
                             
-                            if brightness > 140: # 稍微提高阈值，偏向认为它是亮色
-                                # 文字亮 -> 描边深
-                                dark_strokes = ['#000000', '#333333', '#1A1A1A', '#2F4F4F', '#8B4513', '#800000', '#191970', '#006400']
-                                text_layer.stroke['color'] = random.choice(dark_strokes)
-                            else:
-                                # 文字暗 -> 描边亮
-                                light_strokes = ['#FFFFFF', '#F0F8FF', '#F5F5F5', '#FFFACD', '#E0FFFF', '#FFC0CB', '#98FB98']
-                                text_layer.stroke['color'] = random.choice(light_strokes)
+                            # 策略:
+                            # 如果背景亮 -> 需要深色元素 (文字深 或 描边深)
+                            # 如果背景暗 -> 需要亮色元素 (文字亮 或 描边亮)
+                            
+                            final_stroke_color = '#000000'
+                            
+                            if bg_brightness > 150: # 浅色背景
+                                if txt_brightness > 150: # 文字也亮 (对比度差)
+                                    # 强制深色描边
+                                    dark_strokes = ['#000000', '#333333', '#1A1A1A', '#2F4F4F', '#8B4513', '#800000', '#191970', '#006400']
+                                    final_stroke_color = random.choice(dark_strokes)
+                                else:
+                                    # 文字深，背景亮 -> 描边可以使用浅色(形成光晕)或对比色，这里选安全的白色或浅色
+                                    light_strokes = ['#FFFFFF', '#F0F8FF', '#F5F5F5']
+                                    final_stroke_color = random.choice(light_strokes)
+                            
+                            elif bg_brightness < 100: # 深色背景
+                                if txt_brightness < 100: # 文字也暗
+                                    # 强制亮色描边
+                                    light_strokes = ['#FFFFFF', '#F0F8FF', '#F5F5F5', '#FFFACD', '#E0FFFF', '#FFC0CB', '#98FB98']
+                                    final_stroke_color = random.choice(light_strokes)
+                                else:
+                                    # 文字亮，背景暗 -> 描边可以用深色增加点缀
+                                    dark_strokes = ['#000000', '#333333'] 
+                                    final_stroke_color = random.choice(dark_strokes)
+                            
+                            else: # 中性背景
+                                # 对比文字亮度即可
+                                if txt_brightness > 128:
+                                    final_stroke_color = '#333333'
+                                else:
+                                    final_stroke_color = '#FFFFFF'
+                                    
+                            text_layer.stroke['color'] = final_stroke_color
+                            
+                            # 确保描边宽度可见
+                            if text_layer.stroke.get('width', 0) < 3:
+                                text_layer.stroke['width'] = 4
                         
                     # [RANDOM HIGHLIGHT] 随机文字高亮 (配合 NLP)
                     if self.batch_random_highlight.get():
-                         random_hl_color = self.get_random_color()
+                         # 使用 'random' 字符串，让 image_processor 内部为每个关键词随机分配颜色 (彩虹效果)
+                         random_hl_color = 'random'
                          
                          # 1. 确保 highlight 结构存在
                          if not text_layer.highlight or isinstance(text_layer.highlight, bool):
@@ -3810,13 +3880,11 @@ class MainWindow(tk.Tk):
                          log_details.append(f"随机高亮: {random_hl_color}")
                         
                     # 计算有效边框宽度 (用于文字防遮挡)
+                    # [FIX] 使用 scaled_border_config 而非 border_config，确保边框宽度已缩放
                     effective_border_width = 0
-                    if composite and composite.width and border_config and border_config.get('id') != 'none':
-                         # 边框宽度已经包含了 preview_scale (在 add_border 前处理过吗？)
-                         # batch_export 开始处：border_config['width'] = int(border_config['width'] * preview_scale)
-                         # 所以这里直接取
-                         effective_border_width = border_config.get('width', 0)
-                         # 稍微多给一点余量
+                    if composite and composite.width and scaled_border_config and scaled_border_config.get('id') != 'none':
+                         effective_border_width = scaled_border_config.get('width', 0)
+                         # 稍微多给一点余量 (也要缩放)
                          effective_border_width += int(10 * preview_scale)
 
                     composite.add_text_layer(text_layer, scale=preview_scale, border_width=effective_border_width)

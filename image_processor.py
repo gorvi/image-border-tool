@@ -549,7 +549,8 @@ class TextLayer:
                     style_type = styles_pool[style_hash % len(styles_pool)]
                     
                     if highlight_color == 'random':
-                        color_pool = MACARON_COLORS + DOPAMINE_COLORS
+                        from constants import BRIGHT_HIGHLIGHT_COLORS
+                        color_pool = BRIGHT_HIGHLIGHT_COLORS
                         hash_val = int(hashlib.md5((keyword + str(idx)).encode('utf-8')).hexdigest(), 16)
                         base_color = color_pool[hash_val % len(color_pool)]
                     else:
@@ -567,7 +568,7 @@ class TextLayer:
                     if style_type == 'underline':
                         h_h = max(8, int(scaled_font_size * 0.2))
                         h_y = kw_y + underline_height - h_h + 3
-                        render_draw.rectangle([kw_x, h_y, kw_x + kw_width, h_y + h_h], fill=rgb + (255,))
+                        render_draw.rectangle([kw_x, h_y, kw_x + kw_width, h_y + h_h], fill=rgb + (160,))
                     elif style_type == 'wavy':
                          # 2. 波浪线 (超级加倍)
                         wave_amp = max(6, int(scaled_font_size * 0.15)) # 再次增加振幅
@@ -579,7 +580,7 @@ class TextLayer:
                             dy = wave_amp * math.sin(sx * wave_freq)
                             points.append((kw_x + sx, start_y + dy))
                         if len(points) > 1:
-                            render_draw.line(points, fill=rgb + (255,), width=max(12, int(scaled_font_size * 0.25)))
+                            render_draw.line(points, fill=rgb + (160,), width=max(12, int(scaled_font_size * 0.25)))
                     elif style_type == 'background':
                         pad = int(scaled_font_size * 0.15)
                         bg_rect = [kw_x - pad, line_y, kw_x + kw_width + pad, line_y + line_heights[i]]
@@ -589,28 +590,28 @@ class TextLayer:
                          marker_y = line_y + line_heights[i] - marker_h + 5
                          render_draw.rectangle([kw_x, marker_y, kw_x + kw_width, marker_y + marker_h], fill=rgb + (160,))
                     elif style_type == 'frame':
-                        # 5. 线框 (镂空矩形)
+                        # 5. 线框 (镂空矩形) [BOLD UPDATE: 5x thickness]
                         pad = int(scaled_font_size * 0.1)
                         frame_rect = [kw_x - pad, line_y, kw_x + kw_width + pad, line_y + line_heights[i]]
-                        outline_w = max(2, int(scaled_font_size * 0.05))
-                        render_draw.rectangle(frame_rect, outline=rgb + (255,), width=outline_w)
+                        outline_w = max(10, int(scaled_font_size * 0.25))
+                        render_draw.rectangle(frame_rect, outline=rgb + (160,), width=outline_w)
                     elif style_type == 'bracket':
-                        # 6. 括弧 (左右中括号)
+                        # 6. 括弧 (左右中括号) [BOLD UPDATE: 5x thickness]
                         bracket_w = max(4, int(scaled_font_size * 0.15)) # 括弧宽度
                         bracket_h = line_heights[i] + 4
-                        line_w = max(2, int(scaled_font_size * 0.05)) # 线条粗细
+                        line_w = max(10, int(scaled_font_size * 0.25)) # 线条粗细
                         
                         # 左括号
                         lx = kw_x - bracket_w
                         ly = line_y - 2
                         points_l = [(lx + bracket_w, ly), (lx, ly), (lx, ly + bracket_h), (lx + bracket_w, ly + bracket_h)]
-                        render_draw.line(points_l, fill=rgb + (255,), width=line_w)
+                        render_draw.line(points_l, fill=rgb + (160,), width=line_w)
                         
                         # 右括号
                         rx = kw_x + kw_width + bracket_w
                         ry = ly
                         points_r = [(rx - bracket_w, ry), (rx, ry), (rx, ry + bracket_h), (rx - bracket_w, ry + bracket_h)]
-                        render_draw.line(points_r, fill=rgb + (255,), width=line_w)
+                        render_draw.line(points_r, fill=rgb + (160,), width=line_w)
             
             # [END HIGHLIGHT]
 
