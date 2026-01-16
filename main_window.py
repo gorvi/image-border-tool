@@ -21,6 +21,50 @@ from color_wheel_picker import ColorWheelPicker
 from PIL import Image, ImageTk, ImageDraw, ImageFont
 
 
+class Tooltip:
+    """鼠标悬停提示工具类"""
+    def __init__(self, widget, text, delay=500):
+        self.widget = widget
+        self.text = text
+        self.delay = delay
+        self.tooltip_window = None
+        self.after_id = None
+        
+        widget.bind('<Enter>', self._on_enter)
+        widget.bind('<Leave>', self._on_leave)
+    
+    def _on_enter(self, event):
+        self.after_id = self.widget.after(self.delay, self._show_tooltip)
+    
+    def _on_leave(self, event):
+        if self.after_id:
+            self.widget.after_cancel(self.after_id)
+            self.after_id = None
+        self._hide_tooltip()
+    
+    def _show_tooltip(self):
+        if self.tooltip_window:
+            return
+        
+        x = self.widget.winfo_rootx() + 20
+        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 5
+        
+        self.tooltip_window = tw = tk.Toplevel(self.widget)
+        tw.wm_overrideredirect(True)
+        tw.wm_geometry(f"+{x}+{y}")
+        tw.attributes('-topmost', True)
+        
+        label = tk.Label(tw, text=self.text, bg='#333333', fg='#FFFFFF',
+                        font=('SF Pro Text', 10), padx=8, pady=4,
+                        relief='solid', borderwidth=1)
+        label.pack()
+    
+    def _hide_tooltip(self):
+        if self.tooltip_window:
+            self.tooltip_window.destroy()
+            self.tooltip_window = None
+
+
 class MainWindow(tk.Tk):
     """主窗口类"""
     
@@ -2111,14 +2155,17 @@ class MainWindow(tk.Tk):
             command=self.update_batch_status_text
         )
         regen_check.pack(anchor='w', pady=(0, 10))
+        Tooltip(regen_check, '勾选后会重新处理所有图片，包括已存在的输出文件')
 
         # 参考示例位置选项
-        tk.Checkbutton(
+        match_canvas_check = tk.Checkbutton(
             status_frame, text='参考示例位置和缩放', variable=self.batch_match_canvas,
             bg=COLORS['panel_bg'], fg=COLORS['text_primary'],
             font=('SF Pro Text', 10), selectcolor=COLORS['bg_secondary'],
             activebackground=COLORS['panel_bg']
-        ).pack(anchor='w', pady=(0, 15))
+        )
+        match_canvas_check.pack(anchor='w', pady=(0, 15))
+        Tooltip(match_canvas_check, '批量处理时，按照当前画布上图片的位置和缩放比例来放置每张图片')
 
         # --- 文字目录设置 ---
         text_dir_frame = tk.LabelFrame(batch_frame, text='🔤 批量文字', 
@@ -2128,10 +2175,11 @@ class MainWindow(tk.Tk):
         text_dir_frame.pack(fill=tk.X, padx=12, pady=(0, 12))
         
         # 启用文字目录勾选框
-        tk.Checkbutton(text_dir_frame, text='从 .txt 文件读取文字', variable=self.batch_use_text_dir,
+        text_dir_check = tk.Checkbutton(text_dir_frame, text='从 .txt 文件读取文字', variable=self.batch_use_text_dir,
                       bg=COLORS['panel_bg'], fg=COLORS['text_primary'], font=('SF Pro Text', 10),
-                      selectcolor=COLORS['accent'], activebackground=COLORS['panel_bg']
-                      ).pack(anchor='w')
+                      selectcolor=COLORS['accent'], activebackground=COLORS['panel_bg'])
+        text_dir_check.pack(anchor='w')
+        Tooltip(text_dir_check, '从指定目录读取与图片同名的 .txt 文件作为文字内容')
         
         # 文字目录选择
         text_dir_select_frame = tk.Frame(text_dir_frame, bg=COLORS['panel_bg'])
