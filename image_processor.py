@@ -16,6 +16,11 @@ class ImageProcessor:
         self.original_image = None
         self.current_image = None
         self.canvas_size = (800, 800)
+        self.text_layers = []
+    
+    def clear_text_layers(self):
+        """清空文字层"""
+        self.text_layers = []
         
     def load_image(self, file_path):
         """加载图片"""
