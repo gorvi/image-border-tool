@@ -174,6 +174,9 @@ class MainWindow(tk.Tk):
         self.batch_text_dir = ''  # 文本目录
         self.batch_use_text_dir = tk.BooleanVar(value=False)  # 使用文本目录
         
+        # 自动高亮定时器
+        self._highlight_timer = None
+        
         # 加载用户设置
         self.load_settings()
         
@@ -1728,6 +1731,12 @@ class MainWindow(tk.Tk):
             self.char_count_label.config(text=f'{char_count} / {max_chars}', fg=color)
         
         self._auto_apply_text()
+        
+        # 如果启用了自动高亮，延时触发关键词检测 (Debounce 800ms)
+        if hasattr(self, 'highlight_enabled_var') and self.highlight_enabled_var.get():
+            if hasattr(self, '_highlight_timer') and self._highlight_timer:
+                self.after_cancel(self._highlight_timer)
+            self._highlight_timer = self.after(800, self._auto_detect_silent)
     
     def _set_align(self, val):
         """设置对齐方式"""
