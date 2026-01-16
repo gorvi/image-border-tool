@@ -1788,6 +1788,9 @@ class MainWindow(tk.Tk):
     
     def _on_highlight_toggle(self):
         """高亮开关切换时触发"""
+        # 如果启用了高亮，先检测关键词
+        if self.highlight_enabled_var.get():
+            self._auto_detect_silent()
         self._auto_apply_text()
     
     def _auto_apply_text(self):
@@ -2042,7 +2045,27 @@ class MainWindow(tk.Tk):
         self.show_toast('文字已应用')
     
     def clear_text_layers(self):
-        """清除所有文字层"""
+        """清除所有文字层 (带确认)"""
+        # 检查是否有内容需要清除
+        has_content = False
+        if hasattr(self, 'text_content_entry'):
+            content = self.text_content_entry.get('1.0', 'end-1c').strip()
+            if content:
+                has_content = True
+        
+        if not has_content:
+            self.show_toast('没有文字需要清除')
+            return
+        
+        # 第一次确认
+        if not messagebox.askyesno('确认清除', '确定要清除所有文字内容吗？'):
+            return
+        
+        # 第二次确认
+        if not messagebox.askyesno('再次确认', '此操作不可撤销，确定要清除吗？'):
+            return
+        
+        # 执行清除
         self.text_layers = []
         if hasattr(self, 'canvas_widget'):
             self.canvas_widget.clear_text_layer()
