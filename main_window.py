@@ -2563,10 +2563,8 @@ class MainWindow(tk.Tk):
             self.update_layer_list()
     
     def export_image(self):
-        """导出图片"""
-        if not self.image_processor.current_image:
-            messagebox.showwarning('提示', '请先上传图片！')
-            return
+        """导出图片 (支持无图片导出，仅背景+文字)"""
+        # 不再强制要求上传图片
         
         # 生成默认文件名
         default_name = f"tupian_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
