@@ -573,8 +573,10 @@ class TextLayer:
             
             # 4. 下划线
             if self.underline:
-                underline_y = line_y + line_heights[i] + 2
-                underline_h = max(2, int(scaled_font_size * 0.05))
+                # 下划线位置：文字底部 + 额外间距
+                underline_offset = int(scaled_font_size * 0.15)  # 15% 额外偏移
+                underline_y = line_y + line_heights[i] + underline_offset
+                underline_h = max(2, int(scaled_font_size * 0.06))
                 render_draw.rectangle(
                     [line_x, underline_y, line_x + line_widths[i], underline_y + underline_h],
                     fill=self.color
