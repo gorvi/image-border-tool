@@ -436,9 +436,12 @@ class TextLayer:
             shadow_offset = self.shadow.get('offset', (2, 2))
             padding += max(abs(shadow_offset[0]), abs(shadow_offset[1])) * int(scale) + 5
         
+        # 额外底部边距，防止文字下降部分被截断
+        bottom_extra = int(scaled_font_size * 0.3)
+        
         # 创建渲染画布
         render_width = text_width + padding * 2
-        render_height = text_height + padding * 2
+        render_height = text_height + padding * 2 + bottom_extra
         render_img = Image.new('RGBA', (render_width, render_height), (0, 0, 0, 0))
         render_draw = ImageDraw.Draw(render_img)
         
