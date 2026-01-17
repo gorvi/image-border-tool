@@ -119,21 +119,23 @@ class CanvasWidget(tk.Frame):
         self.canvas_items = []
         self.main_image_id = None
     def _ensure_layer_order(self):
-        """统一管理画布图层顺序：背景 < 图案 < 图片 < 贴纸 < 边框 < 手柄"""
+        """统一管理画布图层顺序：图案 < 背景 < 图片 < 贴纸 < 边框 < 手柄"""
         # 按从底到顶的顺序设置
-        # 1. 背景最底层
-        self.canvas.tag_lower('background_image')
-        # 2. 背景图案
-        self.canvas.tag_raise('background_pattern', 'background_image')
-        # 3. 内容层 (图片、贴纸、文字) 之间的顺序由用户控制，不在这里强制
-        # 4. 边框 (必须在所有内容之上)
-        # 找到所有内容元素
-        for tag in ['main_image', 'sticker', 'text_layer']:
-            self.canvas.tag_raise('corner_mask', tag)
-        
+        # 1. 背景图案在最底层
+        self.canvas.tag_lower('background_pattern')
+        # 2. 背景图片在图案之上
+        self.canvas.tag_raise('background_image', 'background_pattern')
+        # 3. 主图片在背景之上
+        self.canvas.tag_raise('main_image', 'background_image')
+        # 4. 贴纸/文字层
+        self.canvas.tag_raise('sticker', 'main_image')
+        self.canvas.tag_raise('text_layer', 'sticker')
+        # 5. 角落遮罩
+        self.canvas.tag_raise('corner_mask', 'text_layer')
+        # 6. 边框 (必须在所有内容之上)
         self.canvas.tag_raise('border', 'corner_mask')
         self.canvas.tag_raise('border_image', 'border')
-        # 5. 手柄 (必须在边框之上才能点击)
+        # 7. 手柄 (必须在边框之上才能点击)
         self.canvas.tag_raise('handle')
 
     def display_image(self, pil_image):
@@ -920,18 +922,35 @@ class CanvasWidget(tk.Frame):
             elif 'main_image' in tags:
                 # 图片缩放：重新渲染图片
                 if hasattr(self, 'original_pil_image') and hasattr(self, 'current_display_size'):
-                    cur_w, cur_h = self.current_display_size
+                    # 使用拖动开始时的初始尺寸 (如果没有则用当前尺寸)
+                    if not hasattr(self, '_scale_start_size'):
+                        self._scale_start_size = self.current_display_size
                     
-                    # 根据拖拽方向计算新尺寸
-                    if 'e' in self.handle_type or 's' in self.handle_type:
-                        scale_factor = 1 + max(dx, dy) / 200
+                    init_w, init_h = self._scale_start_size
+                    
+                    # 计算从拖动开始的总位移
+                    total_dy = event.y - self.drag_start_y
+                    total_dx = event.x - self.drag_start_x
+                    
+                    # 根据拖拽方向计算缩放比例
+                    if 'se' in self.handle_type or self.handle_type == 's' or self.handle_type == 'e':
+                        scale_delta = max(total_dx, total_dy)
+                    elif 'nw' in self.handle_type or self.handle_type == 'n' or self.handle_type == 'w':
+                        scale_delta = -max(-total_dx, -total_dy)
+                    elif 'ne' in self.handle_type:
+                        scale_delta = max(total_dx, -total_dy)
+                    elif 'sw' in self.handle_type:
+                        scale_delta = max(-total_dx, total_dy)
                     else:
-                        scale_factor = 1 - max(-dx, -dy) / 200
+                        scale_delta = max(total_dx, total_dy)
                     
-                    scale_factor = max(0.3, min(3.0, scale_factor))  # 限制缩放范围
+                    # 基于初始尺寸计算新尺寸 (避免累积误差)
+                    new_w = max(50, int(init_w + scale_delta))
+                    new_h = max(50, int(init_h * new_w / init_w))  # 保持比例
                     
-                    new_w = max(50, int(cur_w * scale_factor))
-                    new_h = max(50, int(cur_h * scale_factor))
+                    # 限制最大尺寸
+                    new_w = min(new_w, self.width * 2)
+                    new_h = min(new_h, self.height * 2)
                     
                     # 重新渲染图片
                     display_img = self.original_pil_image.resize((new_w, new_h), Image.Resampling.LANCZOS)
@@ -982,6 +1001,9 @@ class CanvasWidget(tk.Frame):
         """画布释放事件"""
         self.dragging_item = None
         self.handle_type = None
+        # 清除缩放开始时的尺寸记录
+        if hasattr(self, '_scale_start_size'):
+            del self._scale_start_size
     
     def delete_selected_sticker(self):
         """删除选中项"""

@@ -257,7 +257,6 @@ BACKGROUND_PATTERNS = [
     {'id': 'grid', 'name': '网格', 'icon': '▦'},
     {'id': 'horizontal', 'name': '横线', 'icon': '═'},
     {'id': 'vertical', 'name': '竖线', 'icon': '║'},
-    {'id': 'punch_hole', 'name': '打孔纸', 'icon': '○='},
 ]
 
 # 默认背景色

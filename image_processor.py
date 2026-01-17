@@ -210,12 +210,12 @@ class TextLayer:
     
     # 字体友好名称映射 (用于UI显示) - 只保留中英文兼容字体
     FONT_NAMES = {
-        'pingfang': '苹方 (默认)',
+        'yuanti': 'ST圆体 (默认)',
+        'pingfang': '苹方',
         'hiragino': '冬青黑体',
         'heiti': 'ST黑体',
         'songti': 'ST宋体',
         'kaiti': 'ST楷体',
-        'yuanti': 'ST圆体',
     }
 
     # 字体文件名映射 (用于动态搜索)
@@ -383,6 +383,13 @@ class TextLayer:
         scaled_margin = int(self.margin * scale)
         scaled_stroke_width = int(self.stroke.get('width', 2) * scale) if self.stroke.get('enabled') else 0
         
+        # 计算额外的内部留白 (padding)
+        # 这部分空间用于描边、阴影等效果，会增加最终图片的宽度
+        image_padding = scaled_stroke_width * 2 + int(10 * scale)
+        if self.shadow.get('enabled'):
+            shadow_offset = self.shadow.get('offset', (2, 2))
+            image_padding += max(abs(shadow_offset[0]), abs(shadow_offset[1])) * int(scale) + int(5 * scale)
+            
         font = self._get_font(scaled_font_size)
         
         # 创建临时画布测量文字
@@ -391,7 +398,16 @@ class TextLayer:
         
         # 自动换行处理：按画布宽度减去边距
         # [FIX] 增加 safe_margin_x (边框防遮挡)
-        max_text_width = int(canvas_width - (self.margin * 2 * scale) - (safe_margin_x * 2))
+        # [FIX] 减去 image_padding * 2，因为最终图片宽度会加上这些 padding
+        # 还要为斜体预留空间 (如果是斜体，宽度会增加)
+        skew_padding = 0
+        if self.italic:
+            # 斜体约倾斜 0.2
+            # 估算增加的宽度：高度 * 0.2
+            # 这里先简单预留一部分，更精确的计算需要知道总高度(目前还不知道)
+            skew_padding = int(scaled_font_size * 2 * 0.2) 
+            
+        max_text_width = int(canvas_width - (self.margin * 2 * scale) - (safe_margin_x * 2) - (image_padding * 2) - skew_padding)
         max_text_width = max(100, max_text_width) # 最小保底宽度
         
         # 将文本按行拆分，然后对每行进行自动换行
@@ -444,12 +460,8 @@ class TextLayer:
         line_spacing = int(scaled_font_size * 0.3)
         text_height = sum(line_heights) + line_spacing * (len(lines) - 1) if lines else 0
         
-        # 添加描边和阴影的额外空间
-        # 添加描边和阴影的额外空间
-        padding = scaled_stroke_width * 2 + int(10 * scale)
-        if self.shadow.get('enabled'):
-            shadow_offset = self.shadow.get('offset', (2, 2))
-            padding += max(abs(shadow_offset[0]), abs(shadow_offset[1])) * int(scale) + int(5 * scale)
+        # 使用之前计算的 padding
+        padding = image_padding
         
         # 额外底部边距，防止文字下降部分被截断
         bottom_extra = int(scaled_font_size * 0.3)
@@ -583,7 +595,9 @@ class TextLayer:
                             render_draw.line(points, fill=rgb + (160,), width=max(12, int(scaled_font_size * 0.25)))
                     elif style_type == 'background':
                         pad = int(scaled_font_size * 0.15)
-                        bg_rect = [kw_x - pad, line_y, kw_x + kw_width + pad, line_y + line_heights[i]]
+                        # 垂直偏移修正：文字实际渲染位置偏下，高亮需要下移
+                        v_offset = int(scaled_font_size * 0.1)
+                        bg_rect = [kw_x - pad, line_y + v_offset, kw_x + kw_width + pad, line_y + line_heights[i] + v_offset]
                         render_draw.rounded_rectangle(bg_rect, radius=pad, fill=rgb + (160,))
                     elif style_type == 'marker':
                          marker_h = int(line_heights[i] * 0.8) # 覆盖更多文字高度
@@ -592,7 +606,8 @@ class TextLayer:
                     elif style_type == 'frame':
                         # 5. 线框 (镂空矩形) [BOLD UPDATE: 5x thickness]
                         pad = int(scaled_font_size * 0.1)
-                        frame_rect = [kw_x - pad, line_y, kw_x + kw_width + pad, line_y + line_heights[i]]
+                        v_offset = int(scaled_font_size * 0.1)  # 垂直偏移修正
+                        frame_rect = [kw_x - pad, line_y + v_offset, kw_x + kw_width + pad, line_y + line_heights[i] + v_offset]
                         outline_w = max(10, int(scaled_font_size * 0.25))
                         render_draw.rectangle(frame_rect, outline=rgb + (160,), width=outline_w)
                     elif style_type == 'bracket':
@@ -1217,35 +1232,6 @@ class CompositeImage:
             spacing = pattern_size * 2
             for x in range(0, width, spacing):
                 self.draw.line([(x, 0), (x, height)], fill=pattern_color, width=1)
-        
-        elif pattern_id == 'punch_hole':
-            # 打孔纸效果
-            # 1. 画横线 (使用传入的颜色或默认浅蓝)
-            line_c = pattern_color if pattern_color != '#000000' else '#A0C0E0'
-            spacing = max(40, int(pattern_size * 4)) # 行间距大一点
-            
-            for y in range(spacing, height, spacing):
-                self.draw.line([(0, y), (width, y)], fill=line_c, width=1)
-                
-            # 2. 画竖线 (红色)
-            margin_left = int(width * 0.12)
-            margin_left = max(50, min(120, margin_left))
-            self.draw.line([(margin_left, 0), (margin_left, height)], fill='#FF8080', width=2)
-            
-            # 3. 画打孔 (左侧居中)
-            hole_radius = max(8, int(width * 0.012))
-            hole_x = margin_left // 2
-            
-            num_holes = 3 if height < width else 4
-            hole_spacing = height // (num_holes + 1)
-            
-            for i in range(1, num_holes + 1):
-                hy = hole_spacing * i
-                # 模拟孔洞 (深灰色)
-                self.draw.ellipse(
-                    [hole_x - hole_radius, hy - hole_radius, hole_x + hole_radius, hy + hole_radius],
-                    fill='#505050', outline=None
-                )
     
     def get_image(self):
         """获取最终图片"""

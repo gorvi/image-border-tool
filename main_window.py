@@ -163,6 +163,7 @@ class MainWindow(tk.Tk):
         self.batch_random_pattern = tk.BooleanVar(value=True)
         self.batch_random_highlight = tk.BooleanVar(value=True) # NEW
         self.batch_random_font_style = tk.BooleanVar(value=True) # 随机字体样式
+        self.batch_random_background_style = tk.BooleanVar(value=True) # 随机背景样式 (颜色+图案)
         self.batch_match_canvas = tk.BooleanVar(value=True) # 参考画布位置
         
         # 文字层配置
@@ -171,7 +172,7 @@ class MainWindow(tk.Tk):
             'content': '',
             'font_size': 48,
             'color': '#FFFFFF',
-            'font_family': 'pingfang',
+            'font_family': 'yuanti',
             'align': 'left',
             'position': 'top',
             'margin': 20,
@@ -1663,7 +1664,7 @@ class MainWindow(tk.Tk):
         
         font_map = TextLayer.FONT_NAMES
         font_values = list(font_map.values())
-        default_font_name = font_map.get('pingfang', '苹方 (默认)')
+        default_font_name = font_map.get('yuanti', 'ST圆体 (默认)')
         
         self.font_family_var = tk.StringVar(value=default_font_name)
         
@@ -1841,24 +1842,18 @@ class MainWindow(tk.Tk):
         margin_scale.pack(side=tk.LEFT, padx=(8, 0))
         margin_scale.bind('<ButtonRelease-1>', lambda e: _on_setting_release("设置文字边距"))
         
-        # 8. 阴影设置 (紧凑布局)
+        # 8. 描边设置
         shadow_frame = tk.Frame(text_frame, bg=COLORS['panel_bg'])
         shadow_frame.pack(fill=tk.X, padx=12, pady=2)
         
-        self.text_shadow_var = tk.BooleanVar(value=False)
-        tk.Checkbutton(shadow_frame, text='阴影', variable=self.text_shadow_var,
-                      bg=COLORS['panel_bg'], fg=COLORS['text_primary'],
-                      selectcolor=COLORS['accent'], activebackground=COLORS['panel_bg'],
-                      font=('SF Pro Text', 10),
-                      command=lambda: self._apply_style_with_history("切换阴影")).pack(side=tk.LEFT)
+        self.text_shadow_var = tk.BooleanVar(value=False)  # 保留变量但不显示UI
         
-        # 9. 描边设置 (紧凑布局，同一行)
         self.text_stroke_var = tk.BooleanVar(value=False)
         tk.Checkbutton(shadow_frame, text='描边', variable=self.text_stroke_var,
                       bg=COLORS['panel_bg'], fg=COLORS['text_primary'],
                       selectcolor=COLORS['accent'], activebackground=COLORS['panel_bg'],
                       font=('SF Pro Text', 10),
-                      command=lambda: self._apply_style_with_history("切换描边")).pack(side=tk.LEFT, padx=(12, 0))
+                      command=lambda: self._apply_style_with_history("切换描边")).pack(side=tk.LEFT)
         
         # 描边宽度滑块
         stroke_frame = tk.Frame(text_frame, bg=COLORS['panel_bg'])
@@ -2053,7 +2048,7 @@ class MainWindow(tk.Tk):
 
         # 获取字体键名 (反向查找)
         font_name = self.font_family_var.get() if hasattr(self, 'font_family_var') else '苹方 (默认)'
-        font_family = 'pingfang'
+        font_family = 'yuanti'
         found = False
         for k, v in TextLayer.FONT_NAMES.items():
             if v == font_name:
@@ -2133,7 +2128,9 @@ class MainWindow(tk.Tk):
              pass
         
         # [关键] 使用导出尺寸渲染，和导出时完全一致
-        text_img, x, y = text_layer.render(preset_width, preset_height, scale=preview_scale, safe_margin_x=export_border_width)
+        # [FIX] font_size 已经是预设尺寸下的像素值，所以 render 时 scale 应为 1.0
+        # 如果使用 preview_scale (>1)，会导致字号被再次放大
+        text_img, x, y = text_layer.render(preset_width, preset_height, scale=1.0, safe_margin_x=export_border_width)
         
         if text_img:
             # 缩小回预览尺寸
@@ -2257,18 +2254,18 @@ class MainWindow(tk.Tk):
         if hasattr(self, 'font_size_label'):
             self.font_size_label.config(text=str(self.font_size_var.get()))
         
-        # 更新配置
+        # 更新配置 (保持状态同步)
         self.current_text_config = {
             'content': self.text_content_entry.get('1.0', tk.END).strip() if hasattr(self, 'text_content_entry') else '',
             'font_size': self.font_size_var.get() if hasattr(self, 'font_size_var') else 48,
             'color': self.text_color_var.get() if hasattr(self, 'text_color_var') else '#FFFFFF',
-            'font_family': self.font_family_var.get() if hasattr(self, 'font_family_var') else 'pingfang',
+            'font_family': self.font_family_var.get() if hasattr(self, 'font_family_var') else 'yuanti',
             'align': self.text_align_var.get() if hasattr(self, 'text_align_var') else 'center',
             'position': self.text_position_var.get() if hasattr(self, 'text_position_var') else 'bottom',
             'margin': self.text_margin_var.get() if hasattr(self, 'text_margin_var') else 20,
             'indent': self.text_indent_var.get() if hasattr(self, 'text_indent_var') else True,
             'shadow': {
-                'enabled': self.text_shadow_var.get() if hasattr(self, 'text_shadow_var') else True,
+                'enabled': self.text_shadow_var.get() if hasattr(self, 'text_shadow_var') else False,
                 'color': '#000000',
                 'offset': (2, 2),
                 'blur': 4
@@ -2288,9 +2285,9 @@ class MainWindow(tk.Tk):
             'underline': self.text_underline_var.get() if hasattr(self, 'text_underline_var') else False
         }
         
-        # 刷新画布预览
-        if hasattr(self, 'canvas_widget'):
-            self.canvas_widget.set_text_preview(self.current_text_config)
+        # [FIX] 使用统一的 _auto_apply_text 逻辑，确保缩放一致
+        # 之前的 set_text_preview 使用了错误的缩放逻辑 (基于画布尺寸而非预设尺寸)
+        self._auto_apply_text()
     
     def apply_text_to_canvas(self):
         """应用文字到画布"""
@@ -2566,7 +2563,12 @@ class MainWindow(tk.Tk):
         tk.Checkbutton(random_frame, text='随机字体样式', variable=self.batch_random_font_style,
                        bg=COLORS['panel_bg'], fg=COLORS['text_primary'], font=('SF Pro Text', 10),
                        selectcolor=COLORS['bg_secondary'], activebackground=COLORS['panel_bg']
-                       ).grid(row=2, column=0, columnspan=2, sticky='w', pady=(5, 0))
+                       ).grid(row=2, column=0, sticky='w', pady=(5, 0))
+
+        tk.Checkbutton(random_frame, text='随机背景样式', variable=self.batch_random_background_style,
+                       bg=COLORS['panel_bg'], fg=COLORS['text_primary'], font=('SF Pro Text', 10),
+                       selectcolor=COLORS['bg_secondary'], activebackground=COLORS['panel_bg']
+                       ).grid(row=2, column=1, sticky='w', pady=(5, 0))
 
         
         # 5. 批量导出按钮
@@ -2936,11 +2938,12 @@ class MainWindow(tk.Tk):
         current_image = self.image_processor.get_current_image()
         if current_image:
             self.canvas_widget.display_image(current_image)
-            # 使用 border_config 而非 current_border，确保边框配置一致
-            self.canvas_widget.apply_custom_border(self.border_config)
         else:
             # 没有图片时清除画布上的主图片
             self.canvas_widget.clear_main_image()
+        
+        # 始终应用边框配置 (无论是否有图片)
+        self.canvas_widget.apply_custom_border(self.border_config)
             
         # 确保顺序生效后再强制定序一次 (处理异步渲染)
         self.after(50, lambda: self.canvas_widget._ensure_layer_order())
@@ -3101,19 +3104,19 @@ class MainWindow(tk.Tk):
                 print(f"[DEBUG] Skipping border - width={border_config.get('width')}")
 
             # 6. 绘制文字层 (Moved to be AFTER border to avoid being covered)
-            # 6. 绘制文字层 (Moved to be AFTER border to avoid being covered)
             if hasattr(self, 'current_text_layer') and self.current_text_layer:
-                # 使用 x 轴缩放比例 (假设文字随宽度缩放)
-                text_scale = scale_x
+                # [FIX] 使用 scale=1 因为直接传入 preset_width/preset_height
+                # 与预览逻辑保持一致：预览时先用 preset 尺寸渲染，再缩小显示
+                text_scale = 1.0
                 
-                # 计算有效边框宽度 (用于文字防遮挡)，与 batch_export 逻辑保持一致
+                # 计算有效边框宽度 (与预览一致)
                 effective_border_width = 0
                 if border_config.get('width', 0) > 0:
-                     effective_border_width = border_config.get('width', 0)
-                     # 稍微多给一点余量 (也要缩放)
-                     effective_border_width += int(10 * text_scale)
+                    # 边框宽度需要按画布到预设的比例缩放
+                    effective_border_width = int(border_config.get('width', 0) * scale_x)
+                    effective_border_width += int(10 * scale_x)  # 额外边距
                 
-                # 渲染文字到独立图层
+                # 渲染文字到独立图层 (使用 preset 尺寸，scale=1)
                 print(f"[DEBUG] Exporting text layer: {self.current_text_layer.content[:10]}..., scale={text_scale}, safe_margin={effective_border_width}")
                 text_img, tx, ty = self.current_text_layer.render(preset_width, preset_height, scale=text_scale, safe_margin_x=effective_border_width)
                 
@@ -3529,18 +3532,47 @@ class MainWindow(tk.Tk):
                 if display_width > 0:
                     preview_scale = preset_width / display_width
 
+                # [RANDOM BACKGROUND] 随机背景样式
+                current_bg_color = self.background_color
+                current_bg_pattern = self.background_pattern
+                current_bg_pattern_color = self.background_pattern_color
+                current_bg_pattern_size = self.background_pattern_size
+                
+                if self.batch_random_background_style.get():
+                    import random
+                    from constants import MACARON_COLORS, BORDER_PATTERNS
+                    
+                    # 1. 随机背景颜色 (选择柔和的马卡龙色系，保证和深色文字有对比度)
+                    current_bg_color = random.choice(MACARON_COLORS)
+                    
+                    # 2. 随机背景图案
+                    pattern_ids = [p['id'] for p in BORDER_PATTERNS]
+                    current_bg_pattern = random.choice(pattern_ids)
+                    
+                    # 3. 图案颜色：比背景色稍深/浅，增加层次感
+                    try:
+                        bg_rgb = tuple(int(current_bg_color.lstrip('#')[i:i+2], 16) for i in (0,2,4))
+                        # 调暗背景色作为图案色 (乘以 0.7)
+                        pattern_rgb = tuple(max(0, int(c * 0.7)) for c in bg_rgb)
+                        current_bg_pattern_color = '#{:02X}{:02X}{:02X}'.format(*pattern_rgb)
+                    except:
+                        current_bg_pattern_color = '#CCCCCC'
+                    
+                    # 4. 随机图案大小
+                    current_bg_pattern_size = random.randint(8, 20)
+
                 # 3. 生成复合图片 (背景)
                 composite = CompositeImage(
                     preset_width,
                     preset_height,
-                    bg_color=self.background_color
+                    bg_color=current_bg_color
                 )
                 
                 # 绘制背景图案 (应用缩放)
-                scaled_pattern_size = int(self.background_pattern_size * preview_scale)
+                scaled_pattern_size = int(current_bg_pattern_size * preview_scale)
                 composite.draw_background_pattern(
-                    self.background_pattern,
-                    self.background_pattern_color,
+                    current_bg_pattern,
+                    current_bg_pattern_color,
                     scaled_pattern_size
                 )
                 
@@ -3713,7 +3745,7 @@ class MainWindow(tk.Tk):
                             content=text_content,
                             font_size=cfg.get('font_size', 48),
                             color=cfg.get('color', '#FFFFFF'),
-                            font_family=cfg.get('font_family', 'pingfang'),
+                            font_family=cfg.get('font_family', 'yuanti'),
                             align=cfg.get('align', 'center'),
                             position=cfg.get('position', 'bottom'),
                             margin=cfg.get('margin', 20),
@@ -4202,8 +4234,13 @@ class MainWindow(tk.Tk):
         self.layer_list_frame = tk.Frame(list_frame, bg=COLORS['bg_tertiary'])
         self.layer_list_frame.pack(fill=tk.BOTH, expand=True, padx=2, pady=2)
         
-        # 初始化右键菜单
+        # 初始化右键菜单 (增强版)
         self.layer_context_menu = tk.Menu(self, tearoff=0)
+        self.layer_context_menu.add_command(label="⬆️ 上移一层", command=self.move_layer_up)
+        self.layer_context_menu.add_command(label="⬇️ 下移一层", command=self.move_layer_down)
+        self.layer_context_menu.add_command(label="⏫ 置顶", command=self.move_layer_to_top)
+        self.layer_context_menu.add_command(label="⏬ 置底", command=self.move_layer_to_bottom)
+        self.layer_context_menu.add_separator()
         self.layer_context_menu.add_command(label="👁️ 显示/隐藏", command=self.toggle_layer_visibility)
         self.layer_context_menu.add_separator()
         self.layer_context_menu.add_command(label="🗑️ 删除", command=self.delete_layer_item)
@@ -4220,7 +4257,7 @@ class MainWindow(tk.Tk):
         for widget in self.layer_list_frame.winfo_children():
             widget.destroy()
             
-        # 获取所有图层项 (从上到下: 边框 -> 贴纸(反序) -> 主图 -> 背景)
+        # 获取所有图层项 (从上到下: 边框 -> 贴纸(反序) -> 文字 -> 主图 -> 背景图案)
         layers = []
         
         # 1. 边框 (如果存在或隐藏中)
@@ -4240,20 +4277,48 @@ class MainWindow(tk.Tk):
                     'index': len(self.canvas_widget.stickers) - 1 - i,
                     'visible': is_visible
                 })
+        
+        # 3. 文字层 (如果存在)
+        if self.text_layers and len(self.text_layers) > 0:
+            for idx, text_layer in enumerate(self.text_layers):
+                content = text_layer.content[:10] + ('...' if len(text_layer.content) > 10 else '')
+                # 文字层没有简单的可见性控制，默认显示
+                layers.append({
+                    'type': 'text',
+                    'name': f'🔤 文字: {content}' if content else '🔤 文字',
+                    'id': f'text_{idx}',
+                    'index': idx,
+                    'visible': True
+                })
                 
-        # 3. 主图片
+        # 4. 主图片
         if self.image_processor.current_image:
-            is_visible = self.canvas_widget.canvas.itemcget('main_image', 'state') != 'hidden'
+            try:
+                is_visible = self.canvas_widget.canvas.itemcget('main_image', 'state') != 'hidden'
+            except:
+                is_visible = True
             layers.append({'type': 'image', 'name': '📷 主图片', 'id': 'main_image', 'visible': is_visible})
             
-        # 4. 背景
-        is_visible = self.canvas_widget.canvas.itemcget('background_image', 'state') != 'hidden'
-        layers.append({'type': 'background', 'name': '🎨 背景', 'id': 'background', 'visible': is_visible})
+        # 5. 背景图案 (仅当设置了非 none 图案时显示)
+        if hasattr(self, 'background_pattern') and self.background_pattern and self.background_pattern != 'none':
+            try:
+                is_visible = self.canvas_widget.canvas.itemcget('background_pattern', 'state') != 'hidden'
+            except:
+                is_visible = True
+            layers.append({'type': 'background_pattern', 'name': '✦ 背景图案', 'id': 'background_pattern', 'visible': is_visible})
         
         # 渲染列表
         for idx, layer in enumerate(layers):
             item_frame = tk.Frame(self.layer_list_frame, bg=COLORS['bg_tertiary'])
             item_frame.pack(fill=tk.X, pady=1)
+            
+            # 序号
+            seq_label = tk.Label(
+                item_frame, text=f'{idx + 1}', font=('SF Pro Text', 9),
+                bg=COLORS['bg_tertiary'], fg=COLORS['text_tertiary'],
+                width=2
+            )
+            seq_label.pack(side=tk.LEFT)
             
             # 可见性按钮 (眼睛图标)
             eye_icon = "👁️" if layer['visible'] else "⭕" # 使用圈圈代表闭眼/隐藏，或可用 🔒
@@ -4270,6 +4335,16 @@ class MainWindow(tk.Tk):
                 anchor='w', padx=8, pady=6
             )
             name_label.pack(fill=tk.X, side=tk.LEFT, expand=True)
+            
+            # 拖放手柄 (仅贴纸)
+            drag_handle = None
+            if layer['type'] == 'sticker':
+                drag_handle = tk.Label(
+                    item_frame, text='≡', font=('SF Pro Text', 14),
+                    bg=COLORS['bg_tertiary'], fg=COLORS['text_tertiary'],
+                    width=2, cursor='fleur'  # fleur = 移动光标
+                )
+                drag_handle.pack(side=tk.RIGHT)
             
             # 绑定可见性切换
             # 更新toggle_layer_visibility以接受上下文参数，或者我们在点击时设置context_layer
@@ -4314,6 +4389,147 @@ class MainWindow(tk.Tk):
             eye_label.bind('<Leave>', on_leave)
             item_frame.bind('<Enter>', on_enter)
             item_frame.bind('<Leave>', on_leave)
+            
+            # 拖放功能 (仅贴纸支持)
+            if layer['type'] == 'sticker':
+                def on_drag_start(e, l=layer, f=item_frame, dh=drag_handle, nl=name_label):
+                    self._drag_layer = l
+                    self._drag_start_y = e.y_root
+                    self._drag_start_x = e.x_root
+                    self._drag_source_frame = f
+                    self._drag_valid_drop = False
+                    
+                    # 创建幽灵窗口 (跟随鼠标)
+                    self._drag_ghost = tk.Toplevel(self)
+                    self._drag_ghost.overrideredirect(True)  # 无边框
+                    self._drag_ghost.attributes('-alpha', 0.8)  # 半透明
+                    self._drag_ghost.config(bg=COLORS['warning'])
+                    
+                    ghost_label = tk.Label(
+                        self._drag_ghost, text=nl.cget('text'),
+                        font=('SF Pro Text', 10), bg=COLORS['warning'],
+                        fg='white', padx=10, pady=5
+                    )
+                    ghost_label.pack()
+                    
+                    # 放置在鼠标位置
+                    self._drag_ghost.geometry(f'+{e.x_root + 10}+{e.y_root - 10}')
+                    
+                    # 高亮源图层
+                    f.config(bg=COLORS['text_tertiary'])
+                    for child in f.winfo_children():
+                        try:
+                            child.config(bg=COLORS['text_tertiary'])
+                        except:
+                            pass
+                
+                def on_drag_motion(e, f=item_frame):
+                    if not hasattr(self, '_drag_layer') or not self._drag_layer:
+                        return
+                    
+                    # 移动幽灵窗口
+                    if hasattr(self, '_drag_ghost') and self._drag_ghost:
+                        self._drag_ghost.geometry(f'+{e.x_root + 10}+{e.y_root - 10}')
+                    
+                    drop_y = e.y_root
+                    found_valid = False
+                    
+                    # 清除之前的drop target高亮
+                    for widget in self.layer_list_frame.winfo_children():
+                        if widget != getattr(self, '_drag_source_frame', None):
+                            widget.config(bg=COLORS['bg_tertiary'])
+                            for child in widget.winfo_children():
+                                try:
+                                    child.config(bg=COLORS['bg_tertiary'])
+                                except:
+                                    pass
+                    
+                    # 检查drop target
+                    for widget in self.layer_list_frame.winfo_children():
+                        if widget == getattr(self, '_drag_source_frame', None):
+                            continue
+                        widget_y = widget.winfo_rooty()
+                        widget_h = widget.winfo_height()
+                        if widget_y <= drop_y <= widget_y + widget_h:
+                            # 检查是否是有效目标 (贴纸)
+                            is_valid = False
+                            for child in widget.winfo_children():
+                                try:
+                                    text = child.cget('text')
+                                    if '贴纸' in text:
+                                        is_valid = True
+                                        break
+                                except:
+                                    pass
+                            
+                            if is_valid:
+                                # 有效目标：蓝色
+                                widget.config(bg=COLORS['accent'])
+                                for child in widget.winfo_children():
+                                    try:
+                                        child.config(bg=COLORS['accent'])
+                                    except:
+                                        pass
+                                found_valid = True
+                            else:
+                                # 无效目标：红色
+                                widget.config(bg=COLORS['danger'])
+                                for child in widget.winfo_children():
+                                    try:
+                                        child.config(bg=COLORS['danger'])
+                                    except:
+                                        pass
+                            break
+                    
+                    self._drag_valid_drop = found_valid
+                
+                def on_drag_end(e, l=layer):
+                    # 销毁幽灵窗口
+                    if hasattr(self, '_drag_ghost') and self._drag_ghost:
+                        self._drag_ghost.destroy()
+                        self._drag_ghost = None
+                    
+                    if not hasattr(self, '_drag_layer') or not self._drag_layer:
+                        return
+                    
+                    # 计算放置位置
+                    drop_y = e.y_root
+                    drop_index = None
+                    is_valid_target = False
+                    
+                    for widget in self.layer_list_frame.winfo_children():
+                        widget_y = widget.winfo_rooty()
+                        widget_h = widget.winfo_height()
+                        if widget_y <= drop_y <= widget_y + widget_h:
+                            for child in widget.winfo_children():
+                                try:
+                                    text = child.cget('text')
+                                    if '贴纸' in text:
+                                        drop_index = list(self.layer_list_frame.winfo_children()).index(widget)
+                                        is_valid_target = True
+                                        break
+                                except:
+                                    pass
+                            break
+                    
+                    if is_valid_target and drop_index is not None:
+                        src_idx = self._drag_layer.get('index')
+                        if src_idx is not None:
+                            self._reorder_stickers_by_drop(src_idx, drop_index)
+                    else:
+                        # 无效放置：显示提示
+                        self.show_toast('只能在贴纸之间拖放')
+                    
+                    self._drag_layer = None
+                    self._drag_source_frame = None
+                    self._drag_valid_drop = False
+                    self.update_layer_list()
+                
+                # 绑定拖放事件到拖放手柄
+                if drag_handle:
+                    drag_handle.bind('<Button-1>', on_drag_start)
+                    drag_handle.bind('<B1-Motion>', on_drag_motion)
+                    drag_handle.bind('<ButtonRelease-1>', on_drag_end)
 
     def on_layer_select(self, layer, item_frame):
         """图层选中处理"""
@@ -4330,7 +4546,9 @@ class MainWindow(tk.Tk):
             child.config(bg=COLORS['accent'])
             
         if layer['type'] == 'sticker':
-            self.canvas_widget.select_item(layer['id'])
+            # 选中贴纸并显示缩放手柄
+            self.canvas_widget.selected_item = layer['id']
+            self.canvas_widget._create_scaling_handles(layer['id'])
         else:
             self.canvas_widget.selected_item = None
             self.canvas_widget.canvas.delete('handle')
@@ -4339,7 +4557,18 @@ class MainWindow(tk.Tk):
         """显示图层右键菜单"""
         self.on_layer_select(layer, event.widget.master)
         self.context_layer = layer
-        self.layer_context_menu.entryconfig("🗑️ 删除", state=tk.NORMAL if layer['type'] in ['sticker', 'image'] else tk.DISABLED)
+        
+        # 根据图层类型启用/禁用菜单项
+        ltype = layer['type']
+        can_reorder = ltype == 'sticker'  # 只有贴纸支持排序
+        can_delete = ltype in ['sticker', 'image']
+        
+        self.layer_context_menu.entryconfig("⬆️ 上移一层", state=tk.NORMAL if can_reorder else tk.DISABLED)
+        self.layer_context_menu.entryconfig("⬇️ 下移一层", state=tk.NORMAL if can_reorder else tk.DISABLED)
+        self.layer_context_menu.entryconfig("⏫ 置顶", state=tk.NORMAL if can_reorder else tk.DISABLED)
+        self.layer_context_menu.entryconfig("⏬ 置底", state=tk.NORMAL if can_reorder else tk.DISABLED)
+        self.layer_context_menu.entryconfig("🗑️ 删除", state=tk.NORMAL if can_delete else tk.DISABLED)
+        
         self.layer_context_menu.post(event.x_root, event.y_root)
         
     def toggle_layer_visibility(self):
@@ -4361,13 +4590,16 @@ class MainWindow(tk.Tk):
             self.save_history("切换图层可见性")
             
         elif ltype == 'image':
-            iid = 'main_image'
-            curr = self.canvas_widget.canvas.itemcget(iid, 'state')
-            new_state = 'hidden' if curr!='hidden' else 'normal'
-            self.canvas_widget.canvas.itemconfigure(iid, state=new_state)
+            try:
+                iid = 'main_image'
+                curr = self.canvas_widget.canvas.itemcget(iid, 'state')
+                new_state = 'hidden' if curr!='hidden' else 'normal'
+                self.canvas_widget.canvas.itemconfigure(iid, state=new_state)
+            except:
+                self.show_toast('无法切换：没有主图片')
             
         elif ltype == 'border':
-             # 简单切换边框宽度
+            # 简单切换边框宽度
             if self.border_config.get('width', 0) > 0:
                 self._temp_hidden_border_width = self.border_config.get('width')
                 self.border_config['width'] = 0
@@ -4376,11 +4608,21 @@ class MainWindow(tk.Tk):
                 self._temp_hidden_border_width = None
             self.refresh_canvas()
         
-        elif ltype == 'background':
-            iid = 'background_image'
-            curr = self.canvas_widget.canvas.itemcget(iid, 'state')
-            new_state = 'hidden' if curr!='hidden' else 'normal'
-            self.canvas_widget.canvas.itemconfigure(iid, state=new_state)
+        elif ltype == 'text':
+            # 文字层暂不支持单独隐藏，提示用户
+            self.show_toast('文字层暂不支持隐藏，请清除文字')
+            
+        elif ltype == 'background_pattern':
+            try:
+                # 切换背景图案的可见性
+                items = self.canvas_widget.canvas.find_withtag('background_pattern')
+                if items:
+                    curr = self.canvas_widget.canvas.itemcget(items[0], 'state')
+                    new_state = 'hidden' if curr != 'hidden' else 'normal'
+                    for item in items:
+                        self.canvas_widget.canvas.itemconfigure(item, state=new_state)
+            except Exception as e:
+                print(f"[DEBUG] Toggle background pattern error: {e}")
             
         # 刷新列表显示状态
         self.update_layer_list()
@@ -4403,6 +4645,103 @@ class MainWindow(tk.Tk):
                 self.refresh_canvas()
                 self.update_layer_list()
                 self.save_history("删除图片")
+    
+    def move_layer_up(self):
+        """将图层上移一层"""
+        if not hasattr(self, 'context_layer'): return
+        ltype = self.context_layer['type']
+        
+        if ltype == 'sticker':
+            idx = self.context_layer.get('index')
+            stickers = self.canvas_widget.stickers
+            if idx is not None and idx < len(stickers) - 1:
+                stickers[idx], stickers[idx + 1] = stickers[idx + 1], stickers[idx]
+                self._rebuild_sticker_order()
+                self.update_layer_list()
+                self.save_history("上移图层")
+        else:
+            self.show_toast(f'{ltype} 图层顺序固定')
+    
+    def move_layer_down(self):
+        """将图层下移一层"""
+        if not hasattr(self, 'context_layer'): return
+        ltype = self.context_layer['type']
+        
+        if ltype == 'sticker':
+            idx = self.context_layer.get('index')
+            stickers = self.canvas_widget.stickers
+            if idx is not None and idx > 0:
+                stickers[idx], stickers[idx - 1] = stickers[idx - 1], stickers[idx]
+                self._rebuild_sticker_order()
+                self.update_layer_list()
+                self.save_history("下移图层")
+        else:
+            self.show_toast(f'{ltype} 图层顺序固定')
+    
+    def move_layer_to_top(self):
+        """将图层置顶"""
+        if not hasattr(self, 'context_layer'): return
+        ltype = self.context_layer['type']
+        
+        if ltype == 'sticker':
+            idx = self.context_layer.get('index')
+            stickers = self.canvas_widget.stickers
+            if idx is not None and idx < len(stickers) - 1:
+                sticker = stickers.pop(idx)
+                stickers.append(sticker)
+                self._rebuild_sticker_order()
+                self.update_layer_list()
+                self.save_history("图层置顶")
+        else:
+            self.show_toast(f'{ltype} 图层顺序固定')
+    
+    def move_layer_to_bottom(self):
+        """将图层置底"""
+        if not hasattr(self, 'context_layer'): return
+        ltype = self.context_layer['type']
+        
+        if ltype == 'sticker':
+            idx = self.context_layer.get('index')
+            stickers = self.canvas_widget.stickers
+            if idx is not None and idx > 0:
+                sticker = stickers.pop(idx)
+                stickers.insert(0, sticker)
+                self._rebuild_sticker_order()
+                self.update_layer_list()
+                self.save_history("图层置底")
+        else:
+            self.show_toast(f'{ltype} 图层顺序固定')
+    
+    def _rebuild_sticker_order(self):
+        """重新排序画布上的贴纸图层 (根据 stickers 数组顺序)"""
+        for sticker in self.canvas_widget.stickers:
+            self.canvas_widget.canvas.tag_raise(sticker['id'])
+        self.canvas_widget._ensure_layer_order()
+    
+    def _reorder_stickers_by_drop(self, src_sticker_idx, drop_widget_idx):
+        """通过拖放重新排序贴纸"""
+        stickers = self.canvas_widget.stickers
+        
+        # 计算目标贴纸索引 (drop_widget_idx 是列表中的位置，需要转换)
+        # 图层列表中贴纸是反序显示的，所以需要调整
+        num_stickers = len(stickers)
+        
+        # 边框占1个位置 (如果存在)
+        border_offset = 1 if (self.border_config.get('width', 0) > 0 or getattr(self, '_temp_hidden_border_width', None)) else 0
+        
+        # 目标索引 = num_stickers - 1 - (drop_widget_idx - border_offset)
+        target_idx = num_stickers - 1 - (drop_widget_idx - border_offset)
+        target_idx = max(0, min(num_stickers - 1, target_idx))
+        
+        if src_sticker_idx == target_idx or src_sticker_idx < 0 or src_sticker_idx >= num_stickers:
+            return
+        
+        # 移动贴纸
+        sticker = stickers.pop(src_sticker_idx)
+        stickers.insert(target_idx, sticker)
+        
+        self._rebuild_sticker_order()
+        self.save_history("拖放排序图层")
     
     def create_background_tab(self, parent):
         """背景/主题标签页"""
