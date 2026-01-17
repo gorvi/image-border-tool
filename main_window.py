@@ -342,6 +342,9 @@ class MainWindow(tk.Tk):
         # 延迟应用默认边框（等待画布初始化完成）
         self.after(200, self.apply_default_border)
         
+        # 延迟初始化字体大小（等待所有变量初始化完成）
+        self.after(300, self._initialize_font_size)
+        
         # 绑定快捷键
         self.bind('<Command-z>', lambda e: self.undo())
         self.bind('<Command-Shift-Z>', lambda e: self.redo())
@@ -2337,7 +2340,10 @@ class MainWindow(tk.Tk):
         )
         
         self.text_layers = [text_layer]  # 目前只支持一个文字层
-        self.canvas_widget.set_text_layer(text_layer)
+        # 使用预设尺寸渲染文字
+        preset_width = self.current_size_preset['width']
+        preset_height = self.current_size_preset['height']
+        self.canvas_widget.set_text_layer(text_layer, preset_width, preset_height)
         self.save_history('添加文字')
         self.show_toast('文字已应用')
     
@@ -2681,8 +2687,9 @@ class MainWindow(tk.Tk):
         if hasattr(self, 'background_color') and self.background_color:
             self.canvas_widget.set_background_color(self.background_color)
         
-        # 延迟重新应用边框（等待画布更新完成）
+        # 延迟重新应用边框和文字（等待画布更新完成）
         self.after(50, self.reapply_border_after_resize)
+        self.after(100, self.reapply_text_after_resize)
         
         print(f"✓ 尺寸设置: {preset['name']} ({preset['width']}×{preset['height']})")
     
@@ -2690,6 +2697,66 @@ class MainWindow(tk.Tk):
         """尺寸调整后重新应用边框"""
         if hasattr(self, 'border_config') and self.border_config['width'] > 0:
             self.canvas_widget.apply_custom_border(self.border_config)
+    
+    def reapply_text_after_resize(self):
+        """尺寸调整后重新应用文字，更新排版和字体大小"""
+        if hasattr(self, 'text_content_entry'):
+            content = self.text_content_entry.get('1.0', 'end-1c').strip()
+            if content:
+                # 计算适合新画布尺寸的字体大小
+                new_font_size = self._calculate_optimal_font_size()
+                
+                # 更新字体大小变量
+                if hasattr(self, 'font_size_var'):
+                    self.font_size_var.set(new_font_size)
+                
+                # 更新字体大小标签显示
+                if hasattr(self, 'font_size_label'):
+                    self.font_size_label.config(text=str(new_font_size))
+                
+                # 重新应用文字
+                self._auto_apply_text()
+                print(f"✓ 文字排版已更新: 字体大小 {new_font_size}px")
+    
+    def _calculate_optimal_font_size(self):
+        """根据画布尺寸计算最佳字体大小"""
+        canvas_width = self.current_size_preset['width']
+        canvas_height = self.current_size_preset['height']
+        canvas_area = canvas_width * canvas_height
+        
+        # 基准：1080x1080 画布使用 48px 字体
+        base_area = 1080 * 1080
+        base_font_size = 48
+        
+        # 根据画布面积比例计算字体大小
+        area_ratio = canvas_area / base_area
+        optimal_font_size = int(base_font_size * (area_ratio ** 0.5))
+        
+        # 根据画布比例调整字体大小
+        # 横版（宽>高）：字体可以稍大
+        # 竖版（高>宽）：字体需要稍小
+        canvas_ratio = canvas_width / canvas_height
+        if canvas_ratio > 1.2:
+            optimal_font_size = int(optimal_font_size * 1.1)
+        elif canvas_ratio < 0.8:
+            optimal_font_size = int(optimal_font_size * 0.9)
+        
+        # 确保字体大小在合理范围内
+        optimal_font_size = max(24, min(optimal_font_size, 120))
+        
+        return optimal_font_size
+    
+    def _initialize_font_size(self):
+        """初始化字体大小（根据当前画布尺寸）"""
+        if hasattr(self, 'font_size_var'):
+            optimal_font_size = self._calculate_optimal_font_size()
+            self.font_size_var.set(optimal_font_size)
+            
+            # 更新字体大小标签显示
+            if hasattr(self, 'font_size_label'):
+                self.font_size_label.config(text=str(optimal_font_size))
+            
+            print(f"✓ 字体大小已初始化: {optimal_font_size}px (画布: {self.current_size_preset['name']})")
     
     def apply_transform(self, transform_type, angle=None):
         """应用变换操作"""

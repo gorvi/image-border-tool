@@ -301,6 +301,9 @@ class TextLayer:
         self.indent = indent if indent is not None else False
         
         # 相对坐标 (用于拖拽)
+        # 根据画布比例和位置智能设置初始位置
+        # 横版（宽>高）：文字偏左，避免压住右边框
+        # 竖版（高>宽）：文字偏上，避免压住下边框
         self.rel_x = 0.5
         self.rel_y = 0.1 if position == 'top' else (0.9 if position == 'bottom' else 0.5)
         
@@ -720,25 +723,45 @@ class TextLayer:
             y = int(self.rel_y * canvas_height)
             return x, y
             
-        # 标准位置处理
+        # 计算画布比例，智能调整文字位置
+        canvas_ratio = canvas_width / canvas_height
+        
+        # 横版（宽>高，如16:9）：文字偏左，避免压住右边框
+        # 竖版（高>宽，如9:16）：文字偏上，避免压住下边框
+        # 正方形：居中
+        
+        # 增加基础边距，确保文字在边框内侧
+        base_margin = max(margin, safe_margin_x)
+        extra_margin = int(min(canvas_width, canvas_height) * 0.05)  # 额外5%边距
+        
         # 水平位置
         if self.align == 'left':
-            x = margin + safe_margin_x
+            # 横版时左边距更大，竖版时适中
+            x = base_margin + (extra_margin if canvas_ratio > 1.2 else extra_margin // 2)
         elif self.align == 'right':
-            x = canvas_width - text_width - margin - safe_margin_x
+            # 横版时右边距更大，确保文字不压住右边框
+            x = canvas_width - text_width - base_margin - (extra_margin if canvas_ratio > 1.2 else extra_margin // 2)
         else:  # center
-            x = (canvas_width - text_width) // 2
+            # 横版时文字稍微偏左，避免压住右边框
+            if canvas_ratio > 1.2:
+                x = (canvas_width - text_width) // 2 - int(canvas_width * 0.05)
+            else:
+                x = (canvas_width - text_width) // 2
 
         
         # 垂直位置
         if self.position == 'top':
-            y = margin
+            # 横版时上边距更大，确保文字不压住上边框
+            y = base_margin + (extra_margin if canvas_ratio > 1.2 else extra_margin // 2)
         elif self.position == 'bottom':
-            # 底部额外留出空间，避免太贴边
-            y = canvas_height - text_height - margin * 2 - safe_margin_x # 底部也稍微避让一下边框
-
+            # 竖版时下边距更大，确保文字不压住下边框
+            y = canvas_height - text_height - base_margin - (extra_margin if canvas_ratio < 0.8 else extra_margin // 2)
         else:  # center
             y = (canvas_height - text_height) // 2
+        
+        # 确保文字不会超出画布边界
+        x = max(base_margin, min(x, canvas_width - text_width - base_margin))
+        y = max(base_margin, min(y, canvas_height - text_height - base_margin))
         
         return x, y
     
