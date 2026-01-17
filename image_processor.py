@@ -363,7 +363,7 @@ class TextLayer:
         print("[DEBUG] 使用 Pillow 默认字体")
         return ImageFont.load_default()
     
-    def render(self, canvas_width, canvas_height, scale=1.0, safe_margin_x=0):
+    def render(self, canvas_width, canvas_height, scale=1.0, safe_margin_x=0, safe_margin_y=0):
         """
         渲染文字为 RGBA 图像
         
@@ -371,6 +371,8 @@ class TextLayer:
             canvas_width: 画布宽度
             canvas_height: 画布高度
             scale: 缩放比例 (用于导出时按分辨率缩放)
+            safe_margin_x: 水平方向的安全边距 (防止被边框遮挡)
+            safe_margin_y: 垂直方向的安全边距 (防止被边框遮挡)
             
         Returns:
             (PIL.Image, x, y): 渲染后的图像和位置
@@ -408,6 +410,16 @@ class TextLayer:
             skew_padding = int(scaled_font_size * 2 * 0.2) 
             
         max_text_width = int(canvas_width - (self.margin * 2 * scale) - (safe_margin_x * 2) - (image_padding * 2) - skew_padding)
+        # [FIX] 动态调整最大宽度比例
+        aspect_ratio = canvas_width / canvas_height
+        if aspect_ratio > 1.2: 
+            # 横屏模式 (如 16:9): 限制为 70% 宽度，避免长行文字
+            ratio_limit = 0.7
+        else:
+            # 竖屏/方图: 限制为 90% 宽度，充分利用空间
+            ratio_limit = 0.9
+            
+        max_text_width = min(max_text_width, int(canvas_width * ratio_limit))
         max_text_width = max(100, max_text_width) # 最小保底宽度
         
         # 将文本按行拆分，然后对每行进行自动换行
@@ -419,8 +431,9 @@ class TextLayer:
                 wrapped_lines.append('')
                 continue
                 
-            # 首行缩进处理 (只有在内容不为空时)
-            if self.indent:
+            # 首行缩进处理 (只有在内容不为空时，且非居中对齐)
+            # [FIX] 居中对齐时禁用首行缩进，否则视觉上会偏右
+            if self.indent and self.align != 'center':
                 # 使用全角空格 (2个字符)
                 original_line = '\u3000\u3000' + original_line.lstrip()
 
@@ -476,7 +489,23 @@ class TextLayer:
         draw_x = padding
         draw_y = padding
         
+        # [FIX] 斜体校正：为了防止整块文字向右倾斜（导致左对齐失效），我们需要预先进行补偿
+        # 经过测试，shear 变换会造成向右漂移，所以我们需要根据 Y 坐标调整 X
+        # 这里使用 shear_factor = 0.2 进行校正
+        shear_factor = 0.2
+        if self.italic:
+            # 预留足够的左侧空间，因为我们会把下面的行向左移
+            # 最大偏移量出现在最底部 y = render_height
+            slant_offset = int(render_height * shear_factor)
+            render_width += slant_offset
+            # 重新创建画布以适应新宽度
+            render_img = Image.new('RGBA', (render_width, render_height), (0, 0, 0, 0))
+            render_draw = ImageDraw.Draw(render_img)
+        
         for i, line in enumerate(lines):
+            # 先计算 Y 坐标 (供斜体补偿使用)
+            line_y = draw_y + sum(line_heights[:i]) + line_spacing * i
+            
             # 计算每行的水平位置 (对齐)
             line_x = draw_x
             if self.align == 'center':
@@ -484,7 +513,10 @@ class TextLayer:
             elif self.align == 'right':
                 line_x = draw_x + (text_width - line_widths[i])
             
-            line_y = draw_y + sum(line_heights[:i]) + line_spacing * i
+            # [FIX] 斜体补偿：根据 Y 坐标向右偏移，抵消 shear 变换带来的视觉错位
+            if self.italic:
+                shift = int(line_y * shear_factor)
+                line_x += shift
             
 
             # 0. 绘制关键字高亮 (升级版：防重叠 + 防连续)
@@ -694,7 +726,7 @@ class TextLayer:
         if self.italic:
             from PIL import Image as PILImage
             # 倾斜角度约 12 度
-            shear_factor = 0.2
+            # 倾斜角度约 12 度 (shear_factor 已在上方定义为 0.2)
             new_width = render_width + int(render_height * shear_factor)
             italic_img = PILImage.new('RGBA', (new_width, render_height), (0, 0, 0, 0))
             # 使用仿射变换
@@ -708,11 +740,11 @@ class TextLayer:
         
         # 计算在画布上的位置
         x, y = self._calculate_position(canvas_width, canvas_height, 
-                                         render_width, render_height, scaled_margin, safe_margin_x)
+                                         render_width, render_height, scaled_margin, safe_margin_x, safe_margin_y)
         
         return render_img, x, y
     
-    def _calculate_position(self, canvas_width, canvas_height, text_width, text_height, margin, safe_margin_x=0):
+    def _calculate_position(self, canvas_width, canvas_height, text_width, text_height, margin, safe_margin_x=0, safe_margin_y=0):
         """计算文字在画布上的位置"""
         # 处理自定义位置 (拖拽后)
         if self.position == 'custom':
@@ -732,14 +764,19 @@ class TextLayer:
         
         # 垂直位置
         if self.position == 'top':
-            y = margin
+            y = margin + safe_margin_y
         elif self.position == 'bottom':
             # 底部额外留出空间，避免太贴边
-            y = canvas_height - text_height - margin * 2 - safe_margin_x # 底部也稍微避让一下边框
-
+            y = canvas_height - text_height - margin * 2 - safe_margin_y # 底部也稍微避让一下边框
         else:  # center
             y = (canvas_height - text_height) // 2
         
+        # [FIX] 强制限制顶部位置，防止超出上边框 (特别是在居中对齐且文字太高时)
+        # 无论 vertical position 是什么，y 坐标都不能小于安全边距
+        min_y = margin + safe_margin_y
+        if y < min_y:
+            y = min_y
+            
         return x, y
     
     def to_dict(self):
@@ -888,7 +925,7 @@ class CompositeImage:
         if not text_layer or not text_layer.content:
             return
         
-        rendered, x, y = text_layer.render(self.width, self.height, scale, safe_margin_x=border_width)
+        rendered, x, y = text_layer.render(self.width, self.height, scale, safe_margin_x=border_width, safe_margin_y=border_width)
         if rendered:
             # 确保画布是 RGBA 模式
             if self.canvas.mode != 'RGBA':
