@@ -2093,6 +2093,49 @@ class MainWindow(tk.Tk):
             indent=self.text_indent_var.get() if hasattr(self, 'text_indent_var') else True
         )
         
+        # 获取当前画布尺寸
+        canvas_width = self.current_size_preset['width']
+        canvas_height = self.current_size_preset['height']
+        
+        # 限制最多150字
+        max_chars = 150
+        if len(content) > max_chars:
+            content = content[:max_chars]
+            print(f"⚠️ 内容已超过150字，已自动截断到前{max_chars}字")
+        
+        # 重新创建文字层，传递画布尺寸以自动计算最优参数
+        text_layer = TextLayer(
+            content=content,
+            font_size=self.font_size_var.get() if hasattr(self, 'font_size_var') else 48,
+            color=self.text_color_var.get() if hasattr(self, 'text_color_var') else '#333333',
+            font_family=font_family,
+            align=self.text_align_var.get() if hasattr(self, 'text_align_var') else 'left',
+            position='custom' if custom_pos else (self.text_position_var.get() if hasattr(self, 'text_position_var') else 'top'),
+            margin=self.text_margin_var.get() if hasattr(self, 'text_margin_var') else 20,
+            shadow={
+                'enabled': self.text_shadow_var.get() if hasattr(self, 'text_shadow_var') else False,
+                'color': '#000000',
+                'offset': (2, 2),
+                'blur': 4
+            },
+            stroke={
+                'enabled': self.text_stroke_var.get() if hasattr(self, 'text_stroke_var') else False,
+                'color': self.stroke_color_var.get() if hasattr(self, 'stroke_color_var') else '#000000',
+                'width': self.stroke_width_var.get() if hasattr(self, 'stroke_width_var') else 2
+            },
+            highlight={
+                'enabled': self.highlight_enabled_var.get() if hasattr(self, 'highlight_enabled_var') else True,
+                'keywords': self._auto_keywords if hasattr(self, '_auto_keywords') else [],
+                'color': self.highlight_color_var.get() if hasattr(self, 'highlight_color_var') else '#FFB7B2'
+            },
+            bold=self.text_bold_var.get() if hasattr(self, 'text_bold_var') else False,
+            italic=self.text_italic_var.get() if hasattr(self, 'text_italic_var') else False,
+            underline=self.text_underline_var.get() if hasattr(self, 'text_underline_var') else False,
+            indent=self.text_indent_var.get() if hasattr(self, 'text_indent_var') else True,
+            canvas_width=canvas_width,
+            canvas_height=canvas_height
+        )
+        
         # 恢复自定义位置坐标
         if custom_pos:
             text_layer.rel_x, text_layer.rel_y = custom_pos
@@ -2683,6 +2726,9 @@ class MainWindow(tk.Tk):
         
         # 延迟重新应用边框（等待画布更新完成）
         self.after(50, self.reapply_border_after_resize)
+        
+        # 尺寸切换时重新应用文字排版
+        self.after(100, self._auto_apply_text)
         
         print(f"✓ 尺寸设置: {preset['name']} ({preset['width']}×{preset['height']})")
     
