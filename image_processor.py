@@ -265,7 +265,8 @@ class TextLayer:
 
     def __init__(self, content, font_size=48, color='#FFFFFF', font_family='pingfang', 
                  align='center', position='bottom', margin=20, shadow=None, stroke=None, 
-                 highlight=None, bold=False, italic=False, underline=False, indent=False):
+                 highlight=None, bold=False, italic=False, underline=False, indent=False,
+                 canvas_width=None, canvas_height=None):
         """
         初始化文字层
         
@@ -284,14 +285,14 @@ class TextLayer:
             italic: 斜体
             underline: 下划线
             indent: 首行缩进 (True/False)
+            canvas_width: 画布宽度 (用于动态计算参数)
+            canvas_height: 画布高度 (用于动态计算参数)
         """
         self.content = content
-        self.font_size = font_size
         self.color = color
         self.font_family = font_family
         self.align = align
         self.position = position
-        self.margin = margin
         self.shadow = shadow or {'enabled': False, 'color': '#000000', 'offset': (2, 2), 'blur': 4}
         self.stroke = stroke or {'enabled': False, 'color': '#000000', 'width': 2}
         self.highlight = highlight or {'enabled': False, 'keywords': [], 'color': '#FFB7B2'}
@@ -299,6 +300,15 @@ class TextLayer:
         self.italic = italic
         self.underline = underline
         self.indent = indent if indent is not None else False
+        
+        # 如果提供了画布尺寸，动态计算最优参数
+        if canvas_width and canvas_height:
+            char_count = len(content)
+            self.margin = self.calculate_optimal_margin(canvas_width, canvas_height)
+            self.font_size = self.calculate_optimal_font_size(canvas_width, canvas_height, char_count)
+        else:
+            self.margin = margin
+            self.font_size = font_size
         
         # 相对坐标 (用于拖拽)
         self.rel_x = 0.5
@@ -407,7 +417,7 @@ class TextLayer:
             # 这里先简单预留一部分，更精确的计算需要知道总高度(目前还不知道)
             skew_padding = int(scaled_font_size * 2 * 0.2) 
             
-        max_text_width = int(canvas_width - (self.margin * 2 * scale) - (safe_margin_x * 2) - (image_padding * 2) - skew_padding)
+        max_text_width = int(canvas_width - (self.margin * 2) - (safe_margin_x * 2) - (image_padding * 2) - skew_padding)
         max_text_width = max(100, max_text_width) # 最小保底宽度
         
         # 将文本按行拆分，然后对每行进行自动换行
@@ -785,6 +795,80 @@ class TextLayer:
         layer.rel_x = data.get('rel_x', 0.5)
         layer.rel_y = data.get('rel_y', 0.9)
         return layer
+    
+    @staticmethod
+    def calculate_optimal_margin(canvas_width, canvas_height, border_width=0):
+        """
+        根据画布尺寸动态计算最优边距
+        
+        Args:
+            canvas_width: 画布宽度
+            canvas_height: 画布高度
+            border_width: 边框宽度
+            
+        Returns:
+            计算出的边距值
+        """
+        # 基于画布较小边的3%-5%计算基础边距
+        min_dim = min(canvas_width, canvas_height)
+        base_margin = int(min_dim * 0.035)  # 3.5%
+        
+        # 增加边框避让
+        margin = base_margin + border_width
+        
+        # 限制合理范围
+        margin = max(20, min(margin, 80))
+        
+        return margin
+    
+    @staticmethod
+    def calculate_optimal_font_size(canvas_width, canvas_height, char_count):
+        """
+        根据画布尺寸和字数动态计算最优字体大小
+        
+        Args:
+            canvas_width: 画布宽度
+            canvas_height: 画布高度
+            char_count: 字符数量
+            
+        Returns:
+            计算出的字体大小
+        """
+        # 限制最大字数为150字
+        if char_count > 150:
+            char_count = 150
+        
+        # 基于画布较小边的5%计算基础字体大小
+        min_dim = min(canvas_width, canvas_height)
+        base_font_size = int(min_dim * 0.05)  # 5%
+        
+        # 根据字数动态调整：字数越多，字体越小
+        # 参考：A4纸张适合约300字，字体大小约12pt
+        # 这里按比例缩放
+        if char_count <= 50:
+            # 少量文字，使用较大字体
+            font_size = base_font_size * 1.2
+        elif char_count <= 100:
+            # 中等文字，使用基础字体
+            font_size = base_font_size
+        else:
+            # 较多文字，缩小字体
+            font_size = base_font_size * 0.7
+        
+        # 针对宽屏(16:9)和竖屏(9:16)进行特殊调整
+        aspect_ratio = canvas_width / canvas_height
+        
+        if aspect_ratio > 1.5:  # 宽屏
+            # 宽屏模式下，宽度充足，可以适当增大字体
+            font_size *= 1.1
+        elif aspect_ratio < 0.7:  # 竖屏
+            # 竖屏模式下，高度充足，但宽度受限，适当减小字体
+            font_size *= 0.9
+        
+        # 限制字体大小范围
+        font_size = max(18, min(font_size, 120))
+        
+        return int(font_size)
 
 
 class CompositeImage:
