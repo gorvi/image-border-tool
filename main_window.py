@@ -11,6 +11,7 @@ import os
 import sys
 import subprocess
 from datetime import datetime
+import textwrap
 
 from auth_manager import auth  # [AUTH] 导入授权管理器
 
@@ -2037,6 +2038,32 @@ class MainWindow(tk.Tk):
         self._auto_apply_text()
         self.save_history(action_name)
 
+    def _calculate_font_size(self, text_length, canvas_width, canvas_height):
+        """
+        根据文字长度和画布尺寸计算合适的字体大小
+        目标：确保150字内文字清晰可见，同时不超出画布
+        """
+        if not text_length:
+            return 48
+        
+        # 基础字号计算：基于画布较小边
+        min_dim = min(canvas_width, canvas_height)
+        base_size = min_dim // 20  # 基础字号
+        
+        # 文字密度调整：文字越多，字号越小
+        # 150字时字号约为基础字号的50%
+        # 10字时字号约为基础字号的80%
+        density_factor = 1.0 - (text_length / 150) * 0.3
+        density_factor = max(0.5, min(1.0, density_factor))
+        
+        # 最终字号
+        font_size = int(base_size * density_factor)
+        
+        # 限制字号范围
+        font_size = max(24, min(96, font_size))
+        
+        return font_size
+
     def _auto_apply_text(self):
         """自动应用文字到画布"""
         from image_processor import TextLayer
@@ -2111,6 +2138,11 @@ class MainWindow(tk.Tk):
         # 画布显示尺寸
         cw = self.canvas_widget.width if self.canvas_widget.width > 10 else 800
         ch = self.canvas_widget.height if self.canvas_widget.height > 10 else 600
+        
+        # 计算自适应字体大小
+        text_length = len(content)
+        text_layer.font_size = self._calculate_font_size(text_length, preset_width, preset_height)
+        print(f"[DEBUG] 文字长度: {text_length}, 画布尺寸: {preset_width}×{preset_height}, 计算字号: {text_layer.font_size}")
         
         # 计算从画布到导出的缩放比例 (和 batch_export 相同)
         preview_scale = preset_width / cw if cw > 0 else 1.0
@@ -2683,6 +2715,9 @@ class MainWindow(tk.Tk):
         
         # 延迟重新应用边框（等待画布更新完成）
         self.after(50, self.reapply_border_after_resize)
+        
+        # 重新应用文字排版（如果有文字）
+        self.after(100, self._auto_apply_text)
         
         print(f"✓ 尺寸设置: {preset['name']} ({preset['width']}×{preset['height']})")
     
@@ -3359,6 +3394,38 @@ class MainWindow(tk.Tk):
             print(f"Open directory error: {e}")
             messagebox.showerror('错误', f'无法打开目录: {e}')
 
+    def _get_total_excel_records(self, source_path):
+        """获取Excel中的总数据行数"""
+        if not source_path or not os.path.isfile(source_path):
+            return 0
+        
+        try:
+            import openpyxl
+            wb = openpyxl.load_workbook(source_path, read_only=True)
+            ws = wb.active
+            rows = list(ws.iter_rows(min_row=1))
+            
+            # 检查是否有标题行
+            if rows:
+                first_row = rows[0]
+                val1 = first_row[0].value
+                val2 = first_row[1].value if len(first_row) > 1 else None
+                col1 = str(val1).strip() if val1 is not None else ""
+                col2 = str(val2).strip() if val2 is not None else ""
+                if '文件名' in col1 or '内容' in col2 or 'Filename' in col1:
+                    total_rows = len(rows) - 1  # 减去标题行
+                else:
+                    total_rows = len(rows)
+            else:
+                total_rows = 0
+                
+            wb.close()
+            return total_rows
+            
+        except Exception as e:
+            print(f"[INFO] 无法读取Excel行数: {e}")
+            return 0
+            
     def _load_text_mapping(self, source_path):
         """加载文字映射 (仅 Excel)，并回写更新时间"""
         mapping = {}
@@ -3468,6 +3535,10 @@ class MainWindow(tk.Tk):
         # 始终处理所有选中的图片 (假设文件名唯一或自动重命名)
         images_to_process = self.batch_images
 
+        # [EXCEL] 获取总记录数
+        total_records = 0
+        if self.batch_use_text_dir.get() and self.batch_text_dir:
+            total_records = self._get_total_excel_records(self.batch_text_dir)
         
         success_count = 0
         preset_width = self.current_size_preset['width']
@@ -3476,6 +3547,8 @@ class MainWindow(tk.Tk):
         # 开始日志
         self.batch_log(f"═══ 开始批量处理 ═══")
         self.batch_log(f"待处理: {len(images_to_process)} 张图片")
+        if total_records > 0:
+            self.batch_log(f"Excel记录: {total_records} 条")
         self.batch_log("模式: 默认全量处理 (自动覆盖)")
             
         self.batch_log(f"输出目录: {output_dir}")

@@ -397,7 +397,7 @@ class TextLayer:
         temp_draw = ImageDraw.Draw(temp_img)
         
         # 自动换行处理：按画布宽度减去边距
-        # [FIX] 增加 safe_margin_x (边框防遮挡)
+        # [FIX] 增加 safe_margin_x (边框防遮挡) - 这里乘以2，左右两边都要避开
         # [FIX] 减去 image_padding * 2，因为最终图片宽度会加上这些 padding
         # 还要为斜体预留空间 (如果是斜体，宽度会增加)
         skew_padding = 0
@@ -407,8 +407,12 @@ class TextLayer:
             # 这里先简单预留一部分，更精确的计算需要知道总高度(目前还不知道)
             skew_padding = int(scaled_font_size * 2 * 0.2) 
             
-        max_text_width = int(canvas_width - (self.margin * 2 * scale) - (safe_margin_x * 2) - (image_padding * 2) - skew_padding)
-        max_text_width = max(100, max_text_width) # 最小保底宽度
+        # [FIX] 增加安全系数：多减去一些，确保文字不会超出边界
+        # 原来的计算：canvas_width - (margin * 2 * scale) - (safe_margin_x * 2) - (image_padding * 2) - skew_padding
+        # 修改后：再额外减去10%的安全裕度
+        available_width = int(canvas_width - (self.margin * 2 * scale) - (safe_margin_x * 2) - (image_padding * 2) - skew_padding)
+        available_width = int(available_width * 0.9)  # 额外预留10%的安全裕度
+        max_text_width = max(100, available_width) # 最小保底宽度
         
         # 将文本按行拆分，然后对每行进行自动换行
         original_lines = self.content.split('\n')
@@ -732,7 +736,7 @@ class TextLayer:
         
         # 垂直位置
         if self.position == 'top':
-            y = margin
+            y = margin + safe_margin_x  # 顶部也避让边框
         elif self.position == 'bottom':
             # 底部额外留出空间，避免太贴边
             y = canvas_height - text_height - margin * 2 - safe_margin_x # 底部也稍微避让一下边框
