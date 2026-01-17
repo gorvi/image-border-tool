@@ -540,6 +540,9 @@ class MainWindow(tk.Tk):
         # 延迟应用默认边框（等待画布初始化完成）
         self.after(200, self.apply_default_border)
         
+        # [FIX] 启动时同步预设字号 (确保批量导出默认字号正确)
+        self.after(300, lambda: self.select_size_preset(self.current_size_preset))
+        
     def bind_configure_limit(self):
         """延迟绑定窗口调整事件"""
         if hasattr(self, 'paned_window'):
@@ -3516,8 +3519,8 @@ class MainWindow(tk.Tk):
 
     def batch_export(self):
         """批量导出图片"""
-        if not self.batch_images:
-            messagebox.showwarning('提示', '请先加载图片！')
+        if not self.batch_images and not (self.batch_use_text_dir.get() and self.batch_text_dir):
+            messagebox.showwarning('提示', '请先加载图片 或 启用批量文字！')
             return
         
         # 使用记忆的输出目录或选择新目录
@@ -3532,10 +3535,29 @@ class MainWindow(tk.Tk):
         
         if not output_dir:
             return
-        
-        # 确定要处理的图片列表
-        # 始终处理所有选中的图片 (假设文件名唯一或自动重命名)
-        images_to_process = self.batch_images
+
+        # [EXCEL] 预加载文字映射 (Moved Up)
+        text_mapping = {}
+        text_sequence = []
+        # 注意：先初始化为空，如果有配置再加载
+        if self.batch_use_text_dir.get() and self.batch_text_dir and os.path.exists(self.batch_text_dir):
+            try:
+                # 临时静默日志或允许在此处日志
+                text_mapping, text_sequence = self._load_text_mapping(self.batch_text_dir)
+            except Exception as e:
+                self.batch_log(f"预加载 Excel 失败: {e}")
+
+        # 确定循环目标
+        if self.batch_images:
+            images_to_process = self.batch_images
+            source_type = 'image'
+        elif text_sequence:
+            # 纯文字模式：根据 Excel 行数生成 N 个任务
+            images_to_process = [None] * len(text_sequence)
+            source_type = 'text_only'
+        else:
+             messagebox.showwarning('提示', '未找到有效的图片或文字数据！')
+             return
 
         
         success_count = 0
@@ -3544,36 +3566,38 @@ class MainWindow(tk.Tk):
         
         # 开始日志
         self.batch_log(f"═══ 开始批量处理 ═══")
-        self.batch_log(f"待处理: {len(images_to_process)} 张图片")
-        self.batch_log("模式: 默认全量处理 (自动覆盖)")
-            
+        self.batch_log(f"模式: {'图片处理' if source_type == 'image' else '纯文字生成'}")
+        self.batch_log(f"待处理: {len(images_to_process)} 项")
+        
+        if text_mapping:
+             self.batch_log(f"已加载 Excel 映射: {len(text_mapping)} 条记录")
+        if text_sequence:
+             self.batch_log(f"已加载 Excel 列表: {len(text_sequence)} 条记录")
+
         self.batch_log(f"输出目录: {output_dir}")
         self.batch_log(f"输出尺寸: {preset_width}x{preset_height}")
         
         # 记录本次会话处理数
         self.current_session_processed = 0
         
-        # [EXCEL] 预加载文字映射
-        text_mapping = {}
-        text_sequence = []
-        if self.batch_use_text_dir.get() and self.batch_text_dir:
-            text_mapping, text_sequence = self._load_text_mapping(self.batch_text_dir)
-            if text_mapping:
-                self.batch_log(f"已加载 Excel 映射: {len(text_mapping)} 条记录")
-            if text_sequence:
-                self.batch_log(f"已加载 Excel 列表: {len(text_sequence)} 条记录 (及 {len(text_mapping)} 条指定映射)")
+        # (Deleted duplicate load_text_mapping code block here)
         
         for idx, img_path in enumerate(images_to_process):
-            filename = os.path.basename(img_path)
+            if img_path:
+                filename = os.path.basename(img_path)
+            else:
+                filename = f"text_{idx+1:04d}.png"
+                
             self.batch_log(f"[{idx+1}/{len(images_to_process)}] 处理: {filename}")
             self.update() # 刷新UI
             
             try:
-                # 1. 加载图片
+                # 1. 加载图片 (如果有)
                 processor = ImageProcessor()
-                processor.load_image(img_path)
-                processor.set_canvas_size(preset_width, preset_height)
-                processor.resize_to_canvas(maintain_ratio=True)
+                if img_path:
+                    processor.load_image(img_path)
+                    processor.set_canvas_size(preset_width, preset_height)
+                    processor.resize_to_canvas(maintain_ratio=True)
                 
                 # 2. 准备边框配置 (支持随机化)
                 border_config = self.border_config.copy()
@@ -3649,54 +3673,58 @@ class MainWindow(tk.Tk):
                 log_details = []
                 
                 # 4. 添加主图片
-                if self.batch_match_canvas.get():
-                    # 获取示例图的相对几何信息
-                    geom = self.canvas_widget.get_main_image_geometry()
-                    if geom:
-                        rel_x, rel_y, rel_w, rel_h = geom
-                        # 计算当前预设下的目标区域
-                        target_x = rel_x * preset_width
-                        target_y = rel_y * preset_height
-                        target_w = rel_w * preset_width
-                        target_h = rel_h * preset_height
-                        
-                        # [ENHANCED] 计算比例与缩放
-                        cur_img = processor.get_current_image()
-                        img_ratio = cur_img.width / cur_img.height if cur_img.height > 0 else 1.0
-                        box_ratio = target_w / target_h if target_h > 0 else 1.0
-                        
-                        # 估算相对画布的缩放比例 (以宽为例)
-                        # 假设原始 fit 是 contain 满画布
-                        default_fit_w = preset_width if img_ratio > (preset_width/preset_height) else (preset_height * img_ratio)
-                        scale_factor = target_w / default_fit_w if default_fit_w > 0 else 1.0
-                        
-                        # [SMART ALIGN] 智能对齐判断
-                        # 如果参考位置非常靠上 (比如前 5%)，则判定为顶部对齐
-                        # 如果参考位置非常靠下 (底部 5%)，则判定为底部对齐
-                        anchor = 'center'
-                        if rel_y < 0.05:
-                            anchor = 'n'
-                        elif (rel_y + rel_h) > 0.95:
-                            anchor = 's'
+                # 4. 添加主图片 (仅在有图片时)
+                if img_path:
+                    if self.batch_match_canvas.get():
+                        # 获取示例图的相对几何信息
+                        geom = self.canvas_widget.get_main_image_geometry()
+                        if geom:
+                            rel_x, rel_y, rel_w, rel_h = geom
+                            # 计算当前预设下的目标区域
+                            target_x = rel_x * preset_width
+                            target_y = rel_y * preset_height
+                            target_w = rel_w * preset_width
+                            target_h = rel_h * preset_height
                             
-                        # 如果高度非常接近 (Full Height)，对齐方式影响不大，但保持 Default
-                        
-                        composite.add_main_image_with_geometry(
-                            cur_img, 
-                            target_x, target_y, target_w, target_h,
-                            anchor=anchor
-                        )
-                        
-                        anchor_map = {'n': '顶部', 's': '底部', 'center': '居中'}
-                        log_details.append(f"参考位置: {rel_x:.2f},{rel_y:.2f} 尺寸: {rel_w:.2f}x{rel_h:.2f} => 目标: {int(target_x)},{int(target_y)} {int(target_w)}x{int(target_h)}")
-                        log_details.append(f"比例检查: 图片{img_ratio:.2f} vs 目标框{box_ratio:.2f} | 缩放倍率: {scale_factor:.2f}x | 对齐: {anchor_map.get(anchor)}")
+                            # [ENHANCED] 计算比例与缩放
+                            cur_img = processor.get_current_image()
+                            img_ratio = cur_img.width / cur_img.height if cur_img.height > 0 else 1.0
+                            box_ratio = target_w / target_h if target_h > 0 else 1.0
+                            
+                            # 估算相对画布的缩放比例 (以宽为例)
+                            # 假设原始 fit 是 contain 满画布
+                            default_fit_w = preset_width if img_ratio > (preset_width/preset_height) else (preset_height * img_ratio)
+                            scale_factor = target_w / default_fit_w if default_fit_w > 0 else 1.0
+                            
+                            # [SMART ALIGN] 智能对齐判断
+                            # 如果参考位置非常靠上 (比如前 5%)，则判定为顶部对齐
+                            # 如果参考位置非常靠下 (底部 5%)，则判定为底部对齐
+                            anchor = 'center'
+                            if rel_y < 0.05:
+                                anchor = 'n'
+                            elif (rel_y + rel_h) > 0.95:
+                                anchor = 's'
+                                
+                            # 如果高度非常接近 (Full Height)，对齐方式影响不大，但保持 Default
+                            
+                            composite.add_main_image_with_geometry(
+                                cur_img, 
+                                target_x, target_y, target_w, target_h,
+                                anchor=anchor
+                            )
+                            
+                            anchor_map = {'n': '顶部', 's': '底部', 'center': '居中'}
+                            log_details.append(f"参考位置: {rel_x:.2f},{rel_y:.2f} 尺寸: {rel_w:.2f}x{rel_h:.2f} => 目标: {int(target_x)},{int(target_y)} {int(target_w)}x{int(target_h)}")
+                            log_details.append(f"比例检查: 图片{img_ratio:.2f} vs 目标框{box_ratio:.2f} | 缩放倍率: {scale_factor:.2f}x | 对齐: {anchor_map.get(anchor)}")
+                        else:
+                            # 获取失败回退到默认
+                            composite.add_main_image(processor.get_current_image(), fit_mode='contain')
+                            log_details.append("参考位置获取失败，已回退到默认")
                     else:
-                        # 获取失败回退到默认
                         composite.add_main_image(processor.get_current_image(), fit_mode='contain')
-                        log_details.append("参考位置获取失败，已回退到默认")
+                        log_details.append("位置模式: 默认(适应画布)")
                 else:
-                    composite.add_main_image(processor.get_current_image(), fit_mode='contain')
-                    log_details.append("位置模式: 默认(适应画布)")
+                    log_details.append("模式: 纯背景/文字 (无源图片)")
                 
                 # 记录边框随机化结果
                 if self.batch_random_color.get():

@@ -588,7 +588,7 @@ class TextLayer:
                     kw_y = line_y + line_heights[i] - underline_height
 
                     # 样式逻辑
-                    styles_pool = ['underline', 'wavy', 'background', 'marker', 'frame', 'bracket']
+                    styles_pool = ['underline', 'wavy', 'background', 'marker']
                     style_hash = int(hashlib.md5((keyword + str(idx) + "style").encode('utf-8')).hexdigest(), 16)
                     style_type = styles_pool[style_hash % len(styles_pool)]
                     
@@ -635,30 +635,6 @@ class TextLayer:
                          marker_h = int(line_heights[i] * 0.8) # 覆盖更多文字高度
                          marker_y = line_y + line_heights[i] - marker_h + 5
                          render_draw.rectangle([kw_x, marker_y, kw_x + kw_width, marker_y + marker_h], fill=rgb + (160,))
-                    elif style_type == 'frame':
-                        # 5. 线框 (镂空矩形) [BOLD UPDATE: 5x thickness]
-                        pad = int(scaled_font_size * 0.1)
-                        v_offset = int(scaled_font_size * 0.1)  # 垂直偏移修正
-                        frame_rect = [kw_x - pad, line_y + v_offset, kw_x + kw_width + pad, line_y + line_heights[i] + v_offset]
-                        outline_w = max(10, int(scaled_font_size * 0.25))
-                        render_draw.rectangle(frame_rect, outline=rgb + (160,), width=outline_w)
-                    elif style_type == 'bracket':
-                        # 6. 括弧 (左右中括号) [BOLD UPDATE: 5x thickness]
-                        bracket_w = max(4, int(scaled_font_size * 0.15)) # 括弧宽度
-                        bracket_h = line_heights[i] + 4
-                        line_w = max(10, int(scaled_font_size * 0.25)) # 线条粗细
-                        
-                        # 左括号
-                        lx = kw_x - bracket_w
-                        ly = line_y - 2
-                        points_l = [(lx + bracket_w, ly), (lx, ly), (lx, ly + bracket_h), (lx + bracket_w, ly + bracket_h)]
-                        render_draw.line(points_l, fill=rgb + (160,), width=line_w)
-                        
-                        # 右括号
-                        rx = kw_x + kw_width + bracket_w
-                        ry = ly
-                        points_r = [(rx - bracket_w, ry), (rx, ry), (rx, ry + bracket_h), (rx - bracket_w, ry + bracket_h)]
-                        render_draw.line(points_r, fill=rgb + (160,), width=line_w)
             
             # [END HIGHLIGHT]
 
