@@ -124,19 +124,43 @@ class CanvasWidget(tk.Frame):
         # 1. 背景图案在最底层
         self.canvas.tag_lower('background_pattern')
         # 2. 背景图片在图案之上
-        self.canvas.tag_raise('background_image', 'background_pattern')
+        try:
+            self.canvas.tag_raise('background_image', 'background_pattern')
+        except:
+            pass
         # 3. 主图片在背景之上
-        self.canvas.tag_raise('main_image', 'background_image')
+        try:
+            self.canvas.tag_raise('main_image', 'background_image')
+        except:
+            pass
         # 4. 贴纸/文字层
-        self.canvas.tag_raise('sticker', 'main_image')
-        self.canvas.tag_raise('text_layer', 'sticker')
+        try:
+            self.canvas.tag_raise('sticker', 'main_image')
+        except:
+            pass
+        try:
+            self.canvas.tag_raise('text_layer', 'sticker')
+        except:
+            pass
         # 5. 角落遮罩
-        self.canvas.tag_raise('corner_mask', 'text_layer')
+        try:
+            self.canvas.tag_raise('corner_mask', 'text_layer')
+        except:
+            pass
         # 6. 边框 (必须在所有内容之上)
-        self.canvas.tag_raise('border', 'corner_mask')
-        self.canvas.tag_raise('border_image', 'border')
+        try:
+            self.canvas.tag_raise('border', 'corner_mask')
+        except:
+            pass
+        try:
+            self.canvas.tag_raise('border_image', 'border')
+        except:
+            pass
         # 7. 手柄 (必须在边框之上才能点击)
-        self.canvas.tag_raise('handle')
+        try:
+            self.canvas.tag_raise('handle')
+        except:
+            pass
 
     def display_image(self, pil_image):
         """显示PIL图片"""
@@ -1092,19 +1116,37 @@ class CanvasWidget(tk.Frame):
         
         return (rel_x, rel_y, rel_w, rel_h)
 
-    def set_text_layer(self, text_layer):
-        """设置文字层并渲染到画布"""
+    def set_text_layer(self, text_layer, preset_width=None, preset_height=None):
+        """设置文字层并渲染到画布
+        
+        Args:
+            text_layer: 文字层对象
+            preset_width: 预设画布宽度（如果提供，使用预设尺寸渲染）
+            preset_height: 预设画布高度（如果提供，使用预设尺寸渲染）
+        """
         # 清除旧的文字层
         self.clear_text_layer()
         
         if not text_layer or not text_layer.content:
             return
         
+        # 使用预设尺寸渲染文字（如果提供），否则使用画布显示尺寸
+        render_width = preset_width if preset_width else self.width
+        render_height = preset_height if preset_height else self.height
+        
         # 渲染文字
         from image_processor import TextLayer
-        rendered, x, y = text_layer.render(self.width, self.height, scale=1.0)
+        rendered, x, y = text_layer.render(render_width, render_height, scale=1.0)
         
         if rendered:
+            # 如果使用预设尺寸渲染，需要缩放到画布显示尺寸
+            if preset_width and preset_height:
+                scale_x = self.width / preset_width
+                scale_y = self.height / preset_height
+                rendered = rendered.resize((int(rendered.width * scale_x), int(rendered.height * scale_y)), Image.Resampling.LANCZOS)
+                x = int(x * scale_x)
+                y = int(y * scale_y)
+            
             # 转换为 PhotoImage
             self._text_photo = ImageTk.PhotoImage(rendered)
             self._text_id = self.canvas.create_image(
