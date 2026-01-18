@@ -8,6 +8,7 @@ import os
 import random
 import math
 import hashlib
+import platform
 from constants import MACARON_COLORS, DOPAMINE_COLORS
 
 
@@ -800,6 +801,45 @@ class TextLayer:
         return layer
 
 
+def get_emoji_font(font_size=64):
+    """获取跨平台的彩色 emoji 字体
+    
+    Returns:
+        ImageFont 对象，如果找不到则返回 None
+    """
+    system = platform.system()
+    emoji_font_paths = []
+    
+    if system == 'Darwin':  # macOS
+        emoji_font_paths = [
+            '/System/Library/Fonts/Apple Color Emoji.ttc',
+            '/System/Library/Fonts/Supplemental/Apple Color Emoji.ttc',
+        ]
+    elif system == 'Windows':  # Windows
+        # Windows 10/11 的彩色 emoji 字体
+        emoji_font_paths = [
+            'C:/Windows/Fonts/seguiemj.ttf',  # Segoe UI Emoji
+            'C:/Windows/Fonts/segmdl2.ttf',   # Segoe MDL2 Assets (备用)
+        ]
+    elif system == 'Linux':  # Linux
+        emoji_font_paths = [
+            '/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf',
+            '/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf',
+        ]
+    
+    # 尝试加载字体
+    for font_path in emoji_font_paths:
+        if os.path.exists(font_path):
+            try:
+                font = ImageFont.truetype(font_path, font_size)
+                return font
+            except Exception as e:
+                print(f"[DEBUG] 无法加载字体 {font_path}: {e}")
+                continue
+    
+    return None
+
+
 class CompositeImage:
     """复合图片生成器 - 用于合成最终图片"""
     
@@ -912,13 +952,42 @@ class CompositeImage:
     
     def add_sticker(self, emoji_text, x, y, font_size=64):
         """添加贴纸（表情符号）"""
+        # 尝试使用跨平台的彩色 emoji 字体
+        font = get_emoji_font(font_size)
+        
+        if font:
+            try:
+                # 使用临时画布渲染 emoji（支持 embedded_color）
+                temp_size = font_size * 3
+                emoji_temp = Image.new('RGBA', (temp_size, temp_size), (0, 0, 0, 0))
+                emoji_draw = ImageDraw.Draw(emoji_temp)
+                emoji_draw.text((temp_size // 2, temp_size // 2), emoji_text, 
+                              font=font, anchor="mm", embedded_color=True)
+                
+                # 裁剪到实际内容
+                bbox = emoji_temp.getbbox()
+                if bbox:
+                    emoji_cropped = emoji_temp.crop(bbox)
+                    # 调整大小
+                    if emoji_cropped.width != font_size or emoji_cropped.height != font_size:
+                        emoji_cropped = emoji_cropped.resize((font_size, font_size), Image.Resampling.LANCZOS)
+                    
+                    # 确保画布是 RGBA 模式
+                    if self.canvas.mode != 'RGBA':
+                        self.canvas = self.canvas.convert('RGBA')
+                    
+                    # 计算粘贴位置（居中）
+                    paste_x = x - emoji_cropped.width // 2
+                    paste_y = y - emoji_cropped.height // 2
+                    self.canvas.paste(emoji_cropped, (paste_x, paste_y), emoji_cropped)
+                    return
+            except Exception as e:
+                print(f"[DEBUG] 使用彩色 emoji 字体渲染失败: {e}")
+        
+        # 降级方案：使用默认字体（黑白）
         try:
-            # 使用系统字体支持emoji
-            font = ImageFont.truetype("/System/Library/Fonts/Apple Color Emoji.ttc", font_size)
-            self.draw.text((x, y), emoji_text, font=font, embedded_color=True)
-        except Exception as e:
-            print(f"添加贴纸失败: {e}")
-            # 降级方案：使用默认字体
+            self.draw.text((x, y), emoji_text, fill='black', anchor="mm")
+        except:
             self.draw.text((x, y), emoji_text, fill='black')
     
     

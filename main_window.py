@@ -4,18 +4,21 @@
 
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog, colorchooser, simpledialog
-from PIL import Image, ImageTk, ImageDraw
+from PIL import Image, ImageTk, ImageDraw, ImageFont
 import json
 import random
 import os
 import sys
 import subprocess
+import platform
 from datetime import datetime
+import threading
+from queue import Queue
 
 from auth_manager import auth  # [AUTH] 导入授权管理器
 
 from canvas_widget import CanvasWidget
-from image_processor import ImageProcessor, CompositeImage
+from image_processor import ImageProcessor, CompositeImage, get_emoji_font
 from constants import (SIZE_PRESETS, BORDER_STYLES, STICKER_LIST, COLORS, 
                       BORDER_STYLES_WITH_PREVIEW, BORDER_CATEGORIES, 
                       BORDER_COLORS, BORDER_STYLE_NAMES,
@@ -24,7 +27,6 @@ from constants import (SIZE_PRESETS, BORDER_STYLES, STICKER_LIST, COLORS,
                       QUICK_COLORS)
 from color_picker import ColorPicker
 from color_wheel_picker import ColorWheelPicker
-from PIL import Image, ImageTk, ImageDraw, ImageFont
 
 
 class Tooltip:
@@ -71,6 +73,21 @@ class Tooltip:
             self.tooltip_window = None
 
 
+def get_emoji_font_name():
+    """获取跨平台的 tkinter emoji 字体名称
+    
+    Returns:
+        str: 字体名称，用于 tkinter 的 font 参数
+    """
+    system = platform.system()
+    if system == 'Darwin':  # macOS
+        return 'Apple Color Emoji'
+    elif system == 'Windows':  # Windows
+        return 'Segoe UI Emoji'
+    else:  # Linux
+        return 'Noto Color Emoji'
+
+
 class MainWindow(tk.Tk):
     """主窗口类"""
     
@@ -98,10 +115,11 @@ class MainWindow(tk.Tk):
         self.current_size_preset = SIZE_PRESETS[3]  # 默认小红书3:4
         self.current_border = BORDER_STYLES[0]  # 默认无边框
         self.batch_images = []  # 批量图片列表
-        self.sticker_images = {}  # 缓存贴纸图片
+        self.sticker_images = {}  # 缓存贴纸图片（用于UI显示）
         self.border_preview_images = {}  # 缓存边框预览图
         self.sticker_photo_refs = []  # 保持图片引用，防止被垃圾回收
         self.border_photo_refs = []  # 保持边框图片引用
+        self.sticker_image_cache = {}  # 缓存原始图片对象（用于画布显示，保持高分辨率）
         
         # 历史记录系统
         self.history_stack = []  # 历史记录栈
@@ -1327,7 +1345,7 @@ class MainWindow(tk.Tk):
                 btn = tk.Label(
                     sticker_grid,
                     text=sticker['emoji'],
-                    font=('Apple Color Emoji', 28),
+                    font=(get_emoji_font_name(), 28),
                     bg=COLORS['bg_tertiary'],
                     width=2,
                     height=1,
@@ -2941,7 +2959,7 @@ class MainWindow(tk.Tk):
             self.save_history("重置图片")
     
     def add_sticker(self, sticker):
-        """添加贴纸"""
+        """添加贴纸（兼容旧方法）"""
         # 如果有PNG图片文件，优先使用图片
         sticker_path = os.path.join(os.path.dirname(__file__), 'assets', 'stickers', sticker.get('file', ''))
         if os.path.exists(sticker_path):
@@ -2957,6 +2975,55 @@ class MainWindow(tk.Tk):
         
         self.save_history("添加贴纸")
         self.update_layer_list()
+    
+    def add_sticker_from_file(self, category_type, filename):
+        """从文件添加贴纸 - 直接加载PNG图片"""
+        file_path = os.path.join(
+            os.path.dirname(__file__),
+            'assets', 'stickers',
+            category_type,
+            filename
+        )
+        
+        if not os.path.exists(file_path):
+            print(f"贴纸文件不存在: {file_path}")
+            return
+        
+        # 直接加载PNG图片并添加到画布
+        try:
+            # 检查缓存
+            cache_key = f"{category_type}/{filename}"
+            if cache_key in self.sticker_image_cache:
+                # 从缓存获取
+                img = self.sticker_image_cache[cache_key].copy()
+            else:
+                # 加载新图片
+                img = Image.open(file_path).convert('RGBA')
+                # 缓存原始图片（保持高分辨率）
+                self.sticker_image_cache[cache_key] = img.copy()
+            
+            # 调整大小为合适的尺寸（96像素，增大一倍以保持清晰度）
+            sticker_size = 96
+            img = img.resize((sticker_size, sticker_size), Image.Resampling.LANCZOS)
+            
+            # 添加到画布
+            self.canvas_widget.add_sticker_image(img, size=sticker_size)
+            
+            self.save_history("添加贴纸")
+            self.update_layer_list()
+        except Exception as e:
+            print(f"加载贴纸图片失败 {file_path}: {e}")
+            # 降级方案：尝试使用emoji字符
+            base_name = filename.replace('_3d.png', '').replace('_fluent_3d.png', '').replace('.png', '')
+            emoji_char = '🎨'
+            for sticker in STICKER_LIST:
+                sticker_id = sticker.get('id', '')
+                if sticker_id == base_name or base_name in sticker_id or sticker_id in base_name:
+                    emoji_char = sticker.get('emoji', '🎨')
+                    break
+            self.canvas_widget.add_sticker(emoji_char, font_size=48)
+            self.save_history("添加贴纸")
+            self.update_layer_list()
     
     def rotate_image(self, angle):
         """旋转图片"""
@@ -3098,32 +3165,39 @@ class MainWindow(tk.Tk):
                 
                 print(f"[DEBUG] Sticker: orig=({sticker['x']}, {sticker['y']}), scaled=({scaled_x}, {scaled_y}), size={scaled_size}")
                 
+                # 使用跨平台的 emoji 渲染
                 try:
-                    # Apple Color Emoji 只支持固定大小，使用 160 像素渲染后缩放
-                    base_size = 160
-                    font = ImageFont.truetype("/System/Library/Fonts/Apple Color Emoji.ttc", base_size)
+                    base_size = max(160, scaled_size * 2)  # 使用更大的基础尺寸以获得更好的质量
+                    font = get_emoji_font(base_size)
                     
-                    # 创建临时图层渲染 emoji
-                    temp_size = base_size * 2  # 留足够边距
-                    emoji_temp = Image.new('RGBA', (temp_size, temp_size), (0, 0, 0, 0))
-                    emoji_draw = ImageDraw.Draw(emoji_temp)
-                    emoji_draw.text((temp_size // 2, temp_size // 2), sticker['text'], font=font, anchor="mm", embedded_color=True)
-                    
-                    # 裁剪掉透明边距
-                    bbox = emoji_temp.getbbox()
-                    if bbox:
-                        emoji_cropped = emoji_temp.crop(bbox)
-                        # 缩放到目标尺寸
-                        emoji_resized = emoji_cropped.resize((scaled_size, scaled_size), Image.Resampling.LANCZOS)
+                    if font:
+                        # 创建临时图层渲染 emoji
+                        temp_size = base_size * 2  # 留足够边距
+                        emoji_temp = Image.new('RGBA', (temp_size, temp_size), (0, 0, 0, 0))
+                        emoji_draw = ImageDraw.Draw(emoji_temp)
+                        emoji_draw.text((temp_size // 2, temp_size // 2), sticker['text'], 
+                                      font=font, anchor="mm", embedded_color=True)
                         
-                        # 计算粘贴位置（中心对齐）
-                        paste_x = scaled_x - scaled_size // 2
-                        paste_y = scaled_y - scaled_size // 2
-                        
-                        # 合成到最终图片
-                        if final_img.mode != 'RGBA':
-                            final_img = final_img.convert('RGBA')
-                        final_img.paste(emoji_resized, (paste_x, paste_y), emoji_resized)
+                        # 裁剪掉透明边距
+                        bbox = emoji_temp.getbbox()
+                        if bbox:
+                            emoji_cropped = emoji_temp.crop(bbox)
+                            # 缩放到目标尺寸
+                            emoji_resized = emoji_cropped.resize((scaled_size, scaled_size), Image.Resampling.LANCZOS)
+                            
+                            # 计算粘贴位置（中心对齐）
+                            paste_x = scaled_x - scaled_size // 2
+                            paste_y = scaled_y - scaled_size // 2
+                            
+                            # 合成到最终图片
+                            if final_img.mode != 'RGBA':
+                                final_img = final_img.convert('RGBA')
+                            final_img.paste(emoji_resized, (paste_x, paste_y), emoji_resized)
+                        else:
+                            print(f"[DEBUG] Emoji bbox is None for {sticker['text']}")
+                    else:
+                        print(f"[DEBUG] 无法加载 emoji 字体，使用降级方案")
+                        # 降级方案：使用文本
                 except Exception as e:
                     print(f"[DEBUG] Emoji rendering error: {e}")
                     # 降级方案：使用文本
@@ -3772,27 +3846,8 @@ class MainWindow(tk.Tk):
                     scaled_y = int(sticker['y'] * scale)
                     scaled_size = int(sticker['size'] * scale)
                     
-                    # 简单的贴纸添加 (暂不使用复杂Emoji渲染以保证稳定性，或者复用逻辑)
-                    # 复用之前的Emoji渲染逻辑
-                    try:
-                        base_size = 160
-                        font = ImageFont.truetype("/System/Library/Fonts/Apple Color Emoji.ttc", base_size)
-                        temp_size = base_size * 2
-                        emoji_temp = Image.new('RGBA', (temp_size, temp_size), (0, 0, 0, 0))
-                        emoji_draw = ImageDraw.Draw(emoji_temp)
-                        emoji_draw.text((temp_size // 2, temp_size // 2), sticker['text'], font=font, anchor="mm", embedded_color=True)
-                        bbox = emoji_temp.getbbox()
-                        if bbox:
-                            emoji_cropped = emoji_temp.crop(bbox)
-                            emoji_resized = emoji_cropped.resize((scaled_size, scaled_size), Image.Resampling.LANCZOS)
-                            paste_x = scaled_x - scaled_size // 2
-                            paste_y = scaled_y - scaled_size // 2
-                            if composite.canvas.mode != 'RGBA':
-                                composite.canvas = composite.canvas.convert('RGBA')
-                            composite.canvas.paste(emoji_resized, (paste_x, paste_y), emoji_resized)
-                    except Exception as e:
-                        # 降级处理
-                        composite.add_sticker(sticker['text'], scaled_x, scaled_y, scaled_size)
+                    # 使用跨平台的 emoji 渲染（已在 CompositeImage.add_sticker 中实现）
+                    composite.add_sticker(sticker['text'], scaled_x, scaled_y, scaled_size)
                 
                 # 6. 添加文字层
                 text_content = None
@@ -5483,35 +5538,288 @@ class MainWindow(tk.Tk):
         self.canvas_widget.apply_custom_border(self.border_config)
 
     def create_sticker_tab(self, parent):
-        """贴纸标签页"""
+        """贴纸标签页 - 支持两个分类（fluent_3d和google_emoji）"""
         sticker_label = tk.Label(
             parent, text='点击添加贴纸', font=('SF Pro Display', 13, 'bold'),
             bg=COLORS['panel_bg'], fg=COLORS['text_primary'], anchor='w'
         )
         sticker_label.pack(fill=tk.X, padx=16, pady=(16, 8))
         
-        sticker_grid = tk.Frame(parent, bg=COLORS['panel_bg'])
-        sticker_grid.pack(fill=tk.X, padx=12, pady=(0, 16))
+        # 存储当前打开的分类和所有分类的状态
+        if not hasattr(self, 'active_sticker_category'):
+            self.active_sticker_category = None
+        if not hasattr(self, 'sticker_category_states'):
+            self.sticker_category_states = {}
         
-        for idx, sticker in enumerate(STICKER_LIST):
-            row = idx // 4
-            col = idx % 4
+        # 扫描两个目录的PNG文件
+        assets_dir = os.path.join(os.path.dirname(__file__), 'assets', 'stickers')
+        fluent_3d_dir = os.path.join(assets_dir, 'fluent_3d')
+        google_emoji_dir = os.path.join(assets_dir, 'google_emoji')
+        
+        # 获取文件列表
+        fluent_3d_files = []
+        if os.path.exists(fluent_3d_dir):
+            fluent_3d_files = sorted([f for f in os.listdir(fluent_3d_dir) if f.endswith('.png')])
+        
+        google_emoji_files = []
+        if os.path.exists(google_emoji_dir):
+            google_emoji_files = sorted([f for f in os.listdir(google_emoji_dir) if f.endswith('.png')])
+        
+        # 创建分类容器
+        categories_container = tk.Frame(parent, bg=COLORS['panel_bg'])
+        categories_container.pack(fill=tk.BOTH, expand=True, padx=12, pady=(0, 16))
+        
+        # 存储容器引用，用于手风琴效果
+        self.sticker_categories_container = categories_container
+        
+        # Fluent 3D 分类
+        fluent_category_state = self._create_sticker_category(
+            categories_container, 
+            'Fluent 3D', 
+            fluent_3d_files, 
+            'fluent_3d',
+            is_open=True
+        )
+        self.sticker_category_states['fluent_3d'] = fluent_category_state
+        
+        # Google Emoji 分类
+        google_category_state = self._create_sticker_category(
+            categories_container,
+            'Google Emoji',
+            google_emoji_files,
+            'google_emoji',
+            is_open=False
+        )
+        self.sticker_category_states['google_emoji'] = google_category_state
+    
+    def _create_sticker_category(self, parent, title, file_list, category_type, is_open=False):
+        """创建可折叠的贴纸分类"""
+        # 分类容器
+        category_frame = tk.Frame(parent, bg=COLORS['panel_bg'])
+        category_frame.pack(fill=tk.X, pady=(0, 8))
+        
+        # 标题栏（可点击折叠/展开）
+        header_frame = tk.Frame(category_frame, bg=COLORS['bg_tertiary'], cursor='hand2')
+        header_frame.pack(fill=tk.X)
+        
+        # 折叠/展开图标
+        collapse_label = tk.Label(
+            header_frame, 
+            text='▼' if is_open else '▶',
+            font=('SF Pro Display', 10),
+            bg=COLORS['bg_tertiary'],
+            fg=COLORS['text_primary']
+        )
+        collapse_label.pack(side=tk.LEFT, padx=(8, 8), pady=8)
+        
+        # 标题
+        title_label = tk.Label(
+            header_frame,
+            text=f'{title} ({len(file_list)})',
+            font=('SF Pro Display', 12, 'bold'),
+            bg=COLORS['bg_tertiary'],
+            fg=COLORS['text_primary'],
+            anchor='w'
+        )
+        title_label.pack(side=tk.LEFT, fill=tk.X, expand=True, pady=8)
+        
+        # 创建滚动容器（Canvas + Scrollbar）
+        scroll_container = tk.Frame(category_frame, bg=COLORS['panel_bg'])
+        
+        # Canvas用于滚动
+        scroll_canvas = tk.Canvas(
+            scroll_container,
+            bg=COLORS['panel_bg'],
+            highlightthickness=0,
+            bd=0
+        )
+        
+        # 滚动条
+        scrollbar = tk.Scrollbar(
+            scroll_container,
+            orient='vertical',
+            command=scroll_canvas.yview
+        )
+        
+        # 网格容器（内容区域）
+        grid_frame = tk.Frame(scroll_canvas, bg=COLORS['panel_bg'])
+        
+        # 将grid_frame添加到Canvas
+        scroll_canvas.create_window((0, 0), window=grid_frame, anchor='nw')
+        
+        # 配置滚动区域
+        def configure_scroll_region(e=None):
+            scroll_canvas.configure(scrollregion=scroll_canvas.bbox('all'))
+        
+        grid_frame.bind('<Configure>', configure_scroll_region)
+        
+        # 布局Canvas和Scrollbar
+        scroll_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # 存储状态
+        state = {
+            'is_open': is_open,
+            'grid_frame': grid_frame,
+            'scroll_container': scroll_container,
+            'collapse_label': collapse_label,
+            'category_type': category_type
+        }
+        
+        # 切换折叠/展开的函数
+        def toggle_category(e=None):
+            was_open = state['is_open']
+            state['is_open'] = not state['is_open']
             
-            # 使用Label替代Button
-            if sticker['id'] in self.sticker_images:
-                btn = tk.Label(
-                    sticker_grid, image=self.sticker_images[sticker['id']],
-                    bg=COLORS['bg_tertiary'], cursor='hand2'
-                )
+            if state['is_open']:
+                # 打开当前分类
+                state['collapse_label'].config(text='▼')
+                state['scroll_container'].pack(fill=tk.BOTH, expand=True, padx=8, pady=(4, 0))
+                self.active_sticker_category = category_type
+                # 关闭其他分类
+                self._close_other_sticker_categories(category_type)
             else:
-                btn = tk.Label(
-                    sticker_grid, text=sticker['emoji'], font=('Apple Color Emoji', 28),
-                    bg=COLORS['bg_tertiary'], width=2, height=1, cursor='hand2'
-                )
+                # 关闭当前分类
+                state['collapse_label'].config(text='▶')
+                state['scroll_container'].pack_forget()
+                if self.active_sticker_category == category_type:
+                    self.active_sticker_category = None
+        
+        # 返回状态字典
+        state['toggle_category'] = toggle_category
+        
+        # 绑定点击事件
+        header_frame.bind('<Button-1>', toggle_category)
+        collapse_label.bind('<Button-1>', toggle_category)
+        title_label.bind('<Button-1>', toggle_category)
+        
+        # 初始状态
+        if is_open:
+            state['scroll_container'].pack(fill=tk.BOTH, expand=True, padx=8, pady=(4, 0))
+            if not hasattr(self, 'active_sticker_category') or self.active_sticker_category is None:
+                self.active_sticker_category = category_type
+        
+        # 创建贴纸网格 - 异步加载
+        # 先创建占位符，然后逐步加载
+        placeholder_image = None
+        try:
+            # 创建一个小的占位符图片（48x48，与显示尺寸一致）
+            placeholder = Image.new('RGBA', (48, 48), (200, 200, 200, 100))
+            placeholder_image = ImageTk.PhotoImage(placeholder)
+        except:
+            pass
+        
+        # 存储按钮和文件信息的映射
+        button_map = {}
+        
+        for idx, filename in enumerate(file_list):
+            row = idx // 6
+            col = idx % 6
+            
+            file_path = os.path.join(
+                os.path.dirname(__file__), 
+                'assets', 'stickers', 
+                category_type, 
+                filename
+            )
+            
+            # 创建按钮（先用占位符或emoji）
+            # 不使用width/height限制，让图片自然显示
+            btn = tk.Label(
+                grid_frame,
+                text='🎨',
+                font=(get_emoji_font_name(), 28),
+                bg=COLORS['bg_tertiary'],
+                cursor='hand2'
+            )
+            
+            # 如果有占位符图片，使用它
+            if placeholder_image:
+                btn.config(image=placeholder_image, text='')
+            
             btn.grid(row=row, column=col, padx=4, pady=4)
-            btn.bind('<Button-1>', lambda e, s=sticker: self.add_sticker(s))
+            
+            # 绑定点击事件 - 传递分类类型
+            btn.bind('<Button-1>', lambda e, cat=category_type, f=filename: self.add_sticker_from_file(cat, f))
             btn.bind('<Enter>', lambda e, b=btn: b.config(bg=COLORS['hover']))
             btn.bind('<Leave>', lambda e, b=btn: b.config(bg=COLORS['bg_tertiary']))
+            
+            # 存储按钮和文件路径的映射，用于异步加载
+            button_map[btn] = (file_path, filename)
+        
+        # 异步加载图片
+        self._load_sticker_images_async(button_map, category_type)
+        
+        return category_frame
+    
+    def _close_other_sticker_categories(self, current_category):
+        """关闭其他贴纸分类（手风琴效果）"""
+        if not hasattr(self, 'sticker_category_states'):
+            return
+        
+        for cat_type, state in self.sticker_category_states.items():
+            if cat_type != current_category and state['is_open']:
+                # 关闭其他分类
+                state['is_open'] = False
+                state['collapse_label'].config(text='▶')
+                state['scroll_container'].pack_forget()
+    
+    def _load_sticker_images_async(self, button_map, category_type):
+        """异步加载贴纸图片"""
+        def load_worker():
+            """工作线程：加载图片"""
+            batch_size = 10  # 每批加载10个
+            loaded_count = 0
+            
+            for btn, (file_path, filename) in button_map.items():
+                # 检查缓存
+                cache_key = f"{category_type}/{filename}"
+                if cache_key in self.sticker_image_cache:
+                    # 从缓存获取
+                    cached_img = self.sticker_image_cache[cache_key]
+                    # 创建UI显示用的缩略图
+                    thumb_img = cached_img.copy()
+                    thumb_img = thumb_img.resize((48, 48), Image.Resampling.LANCZOS)
+                    photo = ImageTk.PhotoImage(thumb_img)
+                    self.sticker_photo_refs.append(photo)
+                    
+                    # 在主线程中更新UI
+                    self.after(0, lambda b=btn, p=photo: self._update_sticker_button(b, p))
+                else:
+                    # 加载新图片
+                    if os.path.exists(file_path):
+                        try:
+                            img = Image.open(file_path).convert('RGBA')
+                            # 缓存原始图片（用于画布显示，保持高分辨率）
+                            self.sticker_image_cache[cache_key] = img.copy()
+                            
+                            # 创建UI显示用的缩略图
+                            thumb_img = img.copy()
+                            thumb_img = thumb_img.resize((48, 48), Image.Resampling.LANCZOS)
+                            photo = ImageTk.PhotoImage(thumb_img)
+                            self.sticker_photo_refs.append(photo)
+                            
+                            # 在主线程中更新UI
+                            self.after(0, lambda b=btn, p=photo: self._update_sticker_button(b, p))
+                        except Exception as e:
+                            print(f"加载贴纸图片失败 {filename}: {e}")
+                
+                loaded_count += 1
+                
+                # 每批加载后稍作延迟，避免阻塞
+                if loaded_count % batch_size == 0:
+                    threading.Event().wait(0.01)  # 10ms延迟
+        
+        # 启动加载线程
+        thread = threading.Thread(target=load_worker, daemon=True)
+        thread.start()
+    
+    def _update_sticker_button(self, btn, photo):
+        """更新贴纸按钮的图片（在主线程中调用）"""
+        try:
+            btn.config(image=photo, text='')
+        except:
+            pass
     
     def set_background_color(self, color):
         """设置背景颜色"""

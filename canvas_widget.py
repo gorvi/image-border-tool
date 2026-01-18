@@ -4,8 +4,10 @@
 
 import tkinter as tk
 from tkinter import Canvas
-from PIL import Image, ImageTk
+from PIL import Image, ImageTk, ImageDraw, ImageFont
 import math
+import os
+import platform
 from constants import COLORS
 
 
@@ -32,8 +34,9 @@ class CanvasWidget(tk.Frame):
         # 存储画布对象
         self.canvas_items = []
         self.main_image_id = None
-        self.stickers = []  # 贴纸列表 [{id, x, y, text, size}]
+        self.stickers = []  # 贴纸列表 [{id, x, y, text, size, is_image}]
         self.selected_sticker = None
+        self.sticker_photo_refs = []  # 保持图片引用，防止被垃圾回收
         
         self.dragging_item = None
         self.drag_start_x = 0
@@ -121,22 +124,68 @@ class CanvasWidget(tk.Frame):
     def _ensure_layer_order(self):
         """统一管理画布图层顺序：图案 < 背景 < 图片 < 贴纸 < 边框 < 手柄"""
         # 按从底到顶的顺序设置
-        # 1. 背景图案在最底层
-        self.canvas.tag_lower('background_pattern')
+        # 1. 背景图案在最底层（如果存在）
+        if self.canvas.find_withtag('background_pattern'):
+            self.canvas.tag_lower('background_pattern')
+        
         # 2. 背景图片在图案之上
-        self.canvas.tag_raise('background_image', 'background_pattern')
+        if self.canvas.find_withtag('background_image'):
+            if self.canvas.find_withtag('background_pattern'):
+                self.canvas.tag_raise('background_image', 'background_pattern')
+            else:
+                self.canvas.tag_lower('background_image')
+        
         # 3. 主图片在背景之上
-        self.canvas.tag_raise('main_image', 'background_image')
+        if self.canvas.find_withtag('main_image'):
+            if self.canvas.find_withtag('background_image'):
+                self.canvas.tag_raise('main_image', 'background_image')
+            elif self.canvas.find_withtag('background_pattern'):
+                self.canvas.tag_raise('main_image', 'background_pattern')
+            else:
+                self.canvas.tag_lower('main_image')
+        
         # 4. 贴纸/文字层
-        self.canvas.tag_raise('sticker', 'main_image')
-        self.canvas.tag_raise('text_layer', 'sticker')
+        if self.canvas.find_withtag('sticker'):
+            if self.canvas.find_withtag('main_image'):
+                self.canvas.tag_raise('sticker', 'main_image')
+            elif self.canvas.find_withtag('background_image'):
+                self.canvas.tag_raise('sticker', 'background_image')
+        
+        if self.canvas.find_withtag('text_layer'):
+            if self.canvas.find_withtag('sticker'):
+                self.canvas.tag_raise('text_layer', 'sticker')
+            elif self.canvas.find_withtag('main_image'):
+                self.canvas.tag_raise('text_layer', 'main_image')
+            elif self.canvas.find_withtag('background_image'):
+                self.canvas.tag_raise('text_layer', 'background_image')
+        
         # 5. 角落遮罩
-        self.canvas.tag_raise('corner_mask', 'text_layer')
+        if self.canvas.find_withtag('corner_mask'):
+            if self.canvas.find_withtag('text_layer'):
+                self.canvas.tag_raise('corner_mask', 'text_layer')
+            elif self.canvas.find_withtag('sticker'):
+                self.canvas.tag_raise('corner_mask', 'sticker')
+            elif self.canvas.find_withtag('main_image'):
+                self.canvas.tag_raise('corner_mask', 'main_image')
+        
         # 6. 边框 (必须在所有内容之上)
-        self.canvas.tag_raise('border', 'corner_mask')
-        self.canvas.tag_raise('border_image', 'border')
+        if self.canvas.find_withtag('border'):
+            if self.canvas.find_withtag('corner_mask'):
+                self.canvas.tag_raise('border', 'corner_mask')
+            elif self.canvas.find_withtag('text_layer'):
+                self.canvas.tag_raise('border', 'text_layer')
+            elif self.canvas.find_withtag('sticker'):
+                self.canvas.tag_raise('border', 'sticker')
+        
+        if self.canvas.find_withtag('border_image'):
+            if self.canvas.find_withtag('border'):
+                self.canvas.tag_raise('border_image', 'border')
+            elif self.canvas.find_withtag('corner_mask'):
+                self.canvas.tag_raise('border_image', 'corner_mask')
+        
         # 7. 手柄 (必须在边框之上才能点击)
-        self.canvas.tag_raise('handle')
+        if self.canvas.find_withtag('handle'):
+            self.canvas.tag_raise('handle')
 
     def display_image(self, pil_image):
         """显示PIL图片"""
@@ -188,8 +237,80 @@ class CanvasWidget(tk.Frame):
         self.original_pil_image = None
         self.current_display_size = None
     
-    def add_sticker(self, emoji_text, font_size=48):
-        """添加贴纸"""
+    def _get_emoji_font(self, font_size):
+        """获取跨平台的彩色 emoji 字体"""
+        system = platform.system()
+        emoji_font_paths = []
+        
+        if system == 'Darwin':  # macOS
+            emoji_font_paths = [
+                '/System/Library/Fonts/Apple Color Emoji.ttc',
+                '/System/Library/Fonts/Supplemental/Apple Color Emoji.ttc',
+            ]
+        elif system == 'Windows':  # Windows
+            emoji_font_paths = [
+                'C:/Windows/Fonts/seguiemj.ttf',  # Segoe UI Emoji
+            ]
+        elif system == 'Linux':  # Linux
+            emoji_font_paths = [
+                '/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf',
+            ]
+        
+        for font_path in emoji_font_paths:
+            if os.path.exists(font_path):
+                try:
+                    return ImageFont.truetype(font_path, font_size)
+                except:
+                    continue
+        return None
+    
+    def _render_emoji_image(self, emoji_text, size):
+        """将emoji渲染为彩色图片"""
+        # 尝试使用PNG文件
+        assets_dir = os.path.join(os.path.dirname(__file__), 'assets', 'stickers')
+        # 从emoji文本映射到文件名
+        emoji_to_file = {
+            '❤️': 'heart.png', '⭐': 'star.png', '😊': 'smile.png', '🔥': 'fire.png',
+            '✨': 'sparkles.png', '🌸': 'flower.png', '👑': 'crown.png', '🎀': 'ribbon.png',
+            '🎂': 'cake.png', '🎁': 'gift.png', '🎈': 'balloon.png', '🎵': 'music.png',
+        }
+        
+        if emoji_text in emoji_to_file:
+            png_path = os.path.join(assets_dir, emoji_to_file[emoji_text])
+            if os.path.exists(png_path):
+                try:
+                    img = Image.open(png_path).convert('RGBA')
+                    img = img.resize((size, size), Image.Resampling.LANCZOS)
+                    return img
+                except Exception as e:
+                    print(f"[DEBUG] 加载PNG贴纸失败: {e}")
+        
+        # 使用字体渲染彩色emoji
+        font = self._get_emoji_font(size * 2)  # 使用更大的字体以获得更好的质量
+        if font:
+            try:
+                temp_size = size * 3
+                emoji_temp = Image.new('RGBA', (temp_size, temp_size), (0, 0, 0, 0))
+                emoji_draw = ImageDraw.Draw(emoji_temp)
+                emoji_draw.text((temp_size // 2, temp_size // 2), emoji_text, 
+                              font=font, anchor="mm", embedded_color=True)
+                
+                # 裁剪到实际内容
+                bbox = emoji_temp.getbbox()
+                if bbox:
+                    emoji_cropped = emoji_temp.crop(bbox)
+                    # 调整大小
+                    if emoji_cropped.width != size or emoji_cropped.height != size:
+                        emoji_cropped = emoji_cropped.resize((size, size), Image.Resampling.LANCZOS)
+                    return emoji_cropped
+            except Exception as e:
+                print(f"[DEBUG] 渲染emoji失败: {e}")
+        
+        # 降级方案：返回None，使用文本显示
+        return None
+    
+    def add_sticker(self, emoji_text, font_size=48, sticker_id=None):
+        """添加贴纸（支持彩色显示）"""
         import random
         
         # 贴纸默认放置在四角边框内侧位置
@@ -213,11 +334,76 @@ class CanvasWidget(tk.Frame):
         x = max(margin, min(self.width - margin, base_x + offset_x))
         y = max(margin, min(self.height - margin, base_y + offset_y))
         
-        sticker_id = self.canvas.create_text(
+        # 尝试渲染为彩色图片
+        emoji_img = self._render_emoji_image(emoji_text, font_size)
+        
+        if emoji_img:
+            # 使用图片显示（彩色）
+            photo = ImageTk.PhotoImage(emoji_img)
+            self.sticker_photo_refs.append(photo)  # 保持引用
+            
+            sticker_id = self.canvas.create_image(
+                x, y,
+                image=photo,
+                anchor=tk.CENTER,
+                tags='sticker'
+            )
+        else:
+            # 降级方案：使用文本显示（黑白）
+            sticker_id = self.canvas.create_text(
+                x, y,
+                text=emoji_text,
+                font=('Arial', font_size),
+                fill='black',
+                tags='sticker'
+            )
+        
+        # 添加到贴纸列表
+        sticker_data = {
+            'id': sticker_id,
+            'x': x,
+            'y': y,
+            'text': emoji_text,
+            'size': font_size,
+            'is_image': emoji_img is not None
+        }
+        self.stickers.append(sticker_data)
+        
+        return sticker_id
+    
+    def add_sticker_image(self, img, size=96):
+        """直接添加PNG图片作为贴纸"""
+        import random
+        
+        # 贴纸默认放置在四角边框内侧位置
+        margin = size + 30  # 边框内侧留出边距
+        
+        # 四个角落的位置（按顺序：左下、右下、左上、右上）
+        corners = [
+            (margin, self.height - margin),  # 左下
+            (self.width - margin, self.height - margin),  # 右下
+            (margin, margin),  # 左上
+            (self.width - margin, margin),  # 右上
+        ]
+        
+        # 按贴纸数量循环选择角落
+        corner_index = len(self.stickers) % 4
+        base_x, base_y = corners[corner_index]
+        
+        # 添加小偏移避免完全重叠
+        offset_x = random.randint(-15, 15)
+        offset_y = random.randint(-15, 15)
+        x = max(margin, min(self.width - margin, base_x + offset_x))
+        y = max(margin, min(self.height - margin, base_y + offset_y))
+        
+        # 使用图片显示
+        photo = ImageTk.PhotoImage(img)
+        self.sticker_photo_refs.append(photo)  # 保持引用
+        
+        sticker_id = self.canvas.create_image(
             x, y,
-            text=emoji_text,
-            font=('Arial', font_size),
-            fill='black',
+            image=photo,
+            anchor=tk.CENTER,
             tags='sticker'
         )
         
@@ -226,8 +412,10 @@ class CanvasWidget(tk.Frame):
             'id': sticker_id,
             'x': x,
             'y': y,
-            'text': emoji_text,
-            'size': font_size
+            'text': '',  # PNG图片没有文本
+            'size': size,
+            'is_image': True,
+            'image': img  # 保存原始图片对象
         }
         self.stickers.append(sticker_data)
         
@@ -886,7 +1074,7 @@ class CanvasWidget(tk.Frame):
             tags = self.canvas.gettags(self.selected_item)
             
             if 'sticker' in tags:
-                # 贴纸缩放：通过调整字体大小
+                # 贴纸缩放：通过调整大小
                 for sticker in self.stickers:
                     if sticker['id'] == self.selected_item:
                         current_size = sticker['size']
@@ -897,7 +1085,17 @@ class CanvasWidget(tk.Frame):
                         
                         new_size = max(12, min(200, current_size + size_delta))
                         sticker['size'] = new_size
-                        self.canvas.itemconfigure(self.selected_item, font=('Arial', new_size))
+                        
+                        if sticker.get('is_image', False):
+                            # 图片类型：重新渲染并更新
+                            emoji_img = self._render_emoji_image(sticker['text'], new_size)
+                            if emoji_img:
+                                photo = ImageTk.PhotoImage(emoji_img)
+                                self.sticker_photo_refs.append(photo)  # 保持引用
+                                self.canvas.itemconfigure(self.selected_item, image=photo)
+                        else:
+                            # 文本类型：调整字体大小
+                            self.canvas.itemconfigure(self.selected_item, font=('Arial', new_size))
                         break
             
             elif 'text_layer' in tags:
@@ -1057,7 +1255,17 @@ class CanvasWidget(tk.Frame):
             
             # 更新画布上的对象
             self.canvas.coords(sticker['id'], sticker['x'], sticker['y'])
-            self.canvas.itemconfigure(sticker['id'], font=('Arial', sticker['size']))
+            
+            if sticker.get('is_image', False):
+                # 图片类型：重新渲染并更新
+                emoji_img = self._render_emoji_image(sticker['text'], sticker['size'])
+                if emoji_img:
+                    photo = ImageTk.PhotoImage(emoji_img)
+                    self.sticker_photo_refs.append(photo)  # 保持引用
+                    self.canvas.itemconfigure(sticker['id'], image=photo)
+            else:
+                # 文本类型：调整字体大小
+                self.canvas.itemconfigure(sticker['id'], font=('Arial', sticker['size']))
             
         # 清除旧边框（将在重新应用时绘制新边框）
         self.canvas.delete('border')
