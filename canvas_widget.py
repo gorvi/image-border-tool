@@ -8,7 +8,7 @@ from PIL import Image, ImageTk, ImageDraw, ImageFont
 import math
 import os
 import platform
-from constants import COLORS
+from constants import COLORS, DASH_PATTERNS
 
 
 class CanvasWidget(tk.Frame):
@@ -178,10 +178,13 @@ class CanvasWidget(tk.Frame):
                 self.canvas.tag_raise('border', 'sticker')
         
         if self.canvas.find_withtag('border_image'):
+            # Pattern should be ON TOP of the border lines
             if self.canvas.find_withtag('border'):
                 self.canvas.tag_raise('border_image', 'border')
-            elif self.canvas.find_withtag('corner_mask'):
-                self.canvas.tag_raise('border_image', 'corner_mask')
+            
+            # But BELOW corner mask
+            if self.canvas.find_withtag('corner_mask'):
+                self.canvas.tag_lower('border_image', 'corner_mask')
         
         # 7. 手柄 (必须在边框之上才能点击)
         if self.canvas.find_withtag('handle'):
@@ -371,30 +374,35 @@ class CanvasWidget(tk.Frame):
         
         return sticker_id
     
-    def add_sticker_image(self, img, size=96):
+    def add_sticker_image(self, img, size=96, category=None, image_path=None, x=None, y=None):
         """直接添加PNG图片作为贴纸"""
         import random
         
-        # 贴纸默认放置在四角边框内侧位置
-        margin = size + 30  # 边框内侧留出边距
-        
-        # 四个角落的位置（按顺序：左下、右下、左上、右上）
-        corners = [
-            (margin, self.height - margin),  # 左下
-            (self.width - margin, self.height - margin),  # 右下
-            (margin, margin),  # 左上
-            (self.width - margin, margin),  # 右上
-        ]
-        
-        # 按贴纸数量循环选择角落
-        corner_index = len(self.stickers) % 4
-        base_x, base_y = corners[corner_index]
-        
-        # 添加小偏移避免完全重叠
-        offset_x = random.randint(-15, 15)
-        offset_y = random.randint(-15, 15)
-        x = max(margin, min(self.width - margin, base_x + offset_x))
-        y = max(margin, min(self.height - margin, base_y + offset_y))
+        # 如果未指定坐标，则计算默认位置
+        if x is None or y is None:
+            # 贴纸默认放置在四角边框内侧位置
+            margin = size + 30  # 边框内侧留出边距
+            
+            # 四个角落的位置（按顺序：左下、右下、左上、右上）
+            corners = [
+                (margin, self.height - margin),  # 左下
+                (self.width - margin, self.height - margin),  # 右下
+                (margin, margin),  # 左上
+                (self.width - margin, margin),  # 右上
+            ]
+            
+            # 按贴纸数量循环选择角落
+            corner_index = len(self.stickers) % 4
+            base_x, base_y = corners[corner_index]
+            
+            # 添加小偏移避免完全重叠
+            offset_x = random.randint(-15, 15)
+            offset_y = random.randint(-15, 15)
+            
+            if x is None:
+                x = max(margin, min(self.width - margin, base_x + offset_x))
+            if y is None:
+                y = max(margin, min(self.height - margin, base_y + offset_y))
         
         # 使用图片显示
         photo = ImageTk.PhotoImage(img)
@@ -415,7 +423,9 @@ class CanvasWidget(tk.Frame):
             'text': '',  # PNG图片没有文本
             'size': size,
             'is_image': True,
-            'image': img  # 保存原始图片对象
+            'image': img,  # 保存原始图片对象 (非序列化)
+            'category': category,  # 保存分类信息
+            'image_path': image_path # 保存文件路径 (用于序列化保存设置)
         }
         self.stickers.append(sticker_data)
         
@@ -493,30 +503,14 @@ class CanvasWidget(tk.Frame):
         
         # Setting line style
         dash_pattern = None
-        if line_style == 'dashed':
-            dash_pattern = (10, 5)
-        elif line_style == 'dotted':
-            dash_pattern = (3, 3)
+        if line_style in DASH_PATTERNS:
+            dash_pattern = DASH_PATTERNS[line_style]
         
-        if line_style == 'double':
-            # Double border (supports rounded)
-            outer_width = max(1, border_width // 3)
-            inner_width = max(1, border_width // 3)
-            gap = border_width - outer_width - inner_width
-            
-            # Outer line
-            self.draw_rounded_rectangle(outer_width, radius, color, canvas_w, canvas_h, dash_pattern)
-            
-            # Inner line
-            offset = outer_width + gap
-            inner_w = canvas_w - 2 * offset
-            inner_h = canvas_h - 2 * offset
-            inner_radius = max(0, radius - offset)
-            
-            self.draw_rounded_rectangle(inner_width, inner_radius, color, canvas_w, canvas_h, dash_pattern, offset=offset)
-            
+        # For non-solid line styles, use PIL-based rendering to match Export
+        if line_style in ('dashed', 'dotted', 'double'):
+            self._draw_pil_styled_border(border_width, radius, color, line_style, canvas_w, canvas_h)
         else:
-            # Normal/Dashed/Dotted border
+            # Solid border - use native Tkinter for performance
             self.draw_rounded_rectangle(border_width, radius, color, canvas_w, canvas_h, dash_pattern)
         
         if pattern and pattern != 'none':
@@ -524,6 +518,127 @@ class CanvasWidget(tk.Frame):
             self.draw_border_pattern(pattern, border_width, canvas_w, canvas_h, config.get('pattern_color', '#FFFFFF'), pattern_size)
             
         self._ensure_layer_order()
+
+    def _draw_pil_styled_border(self, border_width, radius, color, line_style, canvas_w, canvas_h):
+        """使用 PIL 绘制样式化边框，以匹配导出效果"""
+        from PIL import Image, ImageDraw
+        
+        # Create transparent image for border
+        border_img = Image.new('RGBA', (canvas_w, canvas_h), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(border_img)
+        
+        x1, y1, x2, y2 = 0, 0, canvas_w - 1, canvas_h - 1
+        width = border_width
+        
+        if line_style == 'dashed':
+            # Diagonal parallelograms (matching CompositeImage._draw_styled_rect)
+            dash_w = width * 1.0
+            gap_w = width * 0.5
+            period = dash_w + gap_w
+            
+            # Top
+            for x in range(int(x1+radius), int(x2-radius), int(period)):
+                if x + dash_w > x2 - radius:
+                    continue
+                points = [
+                    (x, y1+width),
+                    (x + width, y1),
+                    (x + width + dash_w, y1),
+                    (x + dash_w, y1 + width)
+                ]
+                draw.polygon(points, fill=color)
+            
+            # Bottom
+            for x in range(int(x1+radius), int(x2-radius), int(period)):
+                if x + dash_w > x2 - radius:
+                    continue
+                points = [
+                    (x, y2),
+                    (x + width, y2 - width),
+                    (x + width + dash_w, y2 - width),
+                    (x + dash_w, y2)
+                ]
+                draw.polygon(points, fill=color)
+            
+            # Left
+            for y in range(int(y1+radius), int(y2-radius), int(period)):
+                if y + dash_w > y2 - radius:
+                    continue
+                points = [
+                    (x1, y + width),
+                    (x1 + width, y),
+                    (x1 + width, y + dash_w),
+                    (x1, y + width + dash_w)
+                ]
+                draw.polygon(points, fill=color)
+            
+            # Right
+            for y in range(int(y1+radius), int(y2-radius), int(period)):
+                if y + dash_w > y2 - radius:
+                    continue
+                points = [
+                    (x2 - width, y + width),
+                    (x2, y),
+                    (x2, y + dash_w),
+                    (x2 - width, y + width + dash_w)
+                ]
+                draw.polygon(points, fill=color)
+            
+            # Corners (solid arcs)
+            if radius > 0:
+                draw.arc([x1, y1, x1+2*radius, y1+2*radius], 180, 270, fill=color, width=width)
+                draw.arc([x2-2*radius, y1, x2, y1+2*radius], 270, 0, fill=color, width=width)
+                draw.arc([x2-2*radius, y2-2*radius, x2, y2], 0, 90, fill=color, width=width)
+                draw.arc([x1, y2-2*radius, x1+2*radius, y2], 90, 180, fill=color, width=width)
+        
+        elif line_style == 'dotted':
+            # Draw ellipses along border
+            dot_radius = max(width // 2, 3)
+            dot_spacing = max(width, 10)
+            
+            # Top edge
+            for x in range(int(x1 + radius + dot_radius), int(x2 - radius - dot_radius), dot_spacing):
+                draw.ellipse([x - dot_radius, y1, x + dot_radius, y1 + width], fill=color)
+            # Bottom edge
+            for x in range(int(x1 + radius + dot_radius), int(x2 - radius - dot_radius), dot_spacing):
+                draw.ellipse([x - dot_radius, y2 - width, x + dot_radius, y2], fill=color)
+            # Left edge
+            for y in range(int(y1 + radius + dot_radius), int(y2 - radius - dot_radius), dot_spacing):
+                draw.ellipse([x1, y - dot_radius, x1 + width, y + dot_radius], fill=color)
+            # Right edge
+            for y in range(int(y1 + radius + dot_radius), int(y2 - radius - dot_radius), dot_spacing):
+                draw.ellipse([x2 - width, y - dot_radius, x2, y + dot_radius], fill=color)
+            
+            # Corners
+            if radius > 0:
+                draw.arc([x1, y1, x1+2*radius, y1+2*radius], 180, 270, fill=color, width=width)
+                draw.arc([x2-2*radius, y1, x2, y1+2*radius], 270, 0, fill=color, width=width)
+                draw.arc([x2-2*radius, y2-2*radius, x2, y2], 0, 90, fill=color, width=width)
+                draw.arc([x1, y2-2*radius, x1+2*radius, y2], 90, 180, fill=color, width=width)
+        
+        elif line_style == 'double':
+            # Two parallel rectangles
+            outer_width = max(1, width // 3)
+            inner_width = max(1, width // 3)
+            gap = width - outer_width - inner_width
+            
+            # Outer line
+            if radius > 0:
+                draw.rounded_rectangle([x1, y1, x2, y2], radius=radius, outline=color, width=outer_width)
+            else:
+                draw.rectangle([x1, y1, x2, y2], outline=color, width=outer_width)
+            
+            # Inner line
+            offset = outer_width + gap
+            inner_radius = max(0, radius - offset)
+            if inner_radius > 0:
+                draw.rounded_rectangle([x1+offset, y1+offset, x2-offset, y2-offset], radius=inner_radius, outline=color, width=inner_width)
+            else:
+                draw.rectangle([x1+offset, y1+offset, x2-offset, y2-offset], outline=color, width=inner_width)
+        
+        # Display the PIL image on the canvas
+        self.border_style_photo = ImageTk.PhotoImage(border_img)
+        self.canvas.create_image(0, 0, anchor=tk.NW, image=self.border_style_photo, tags='border')
 
     def draw_corner_masks(self, radius, color, w, h):
         """绘制角落遮罩以模拟圆角"""
@@ -642,16 +757,16 @@ class CanvasWidget(tk.Frame):
             spacing = 6
             # 上边框
             for i in range(0, canvas_w, spacing):
-                self.canvas.create_line(i, 0, i + bw, bw, fill=pattern_color, tags='border')
+                self.canvas.create_line(i, 0, i + bw, bw, fill=pattern_color, tags='border_image')
             # 下边框
             for i in range(0, canvas_w, spacing):
-                self.canvas.create_line(i, canvas_h - bw, i + bw, canvas_h, fill=pattern_color, tags='border')
+                self.canvas.create_line(i, canvas_h - bw, i + bw, canvas_h, fill=pattern_color, tags='border_image')
             # 左边框
             for i in range(bw, canvas_h - bw, spacing):
-                self.canvas.create_line(0, i, bw, i + bw, fill=pattern_color, tags='border')
+                self.canvas.create_line(0, i, bw, i + bw, fill=pattern_color, tags='border_image')
             # 右边框
             for i in range(bw, canvas_h - bw, spacing):
-                self.canvas.create_line(canvas_w - bw, i, canvas_w, i + bw, fill=pattern_color, tags='border')
+                self.canvas.create_line(canvas_w - bw, i, canvas_w, i + bw, fill=pattern_color, tags='border_image')
         
         elif pattern == 'dots':
             # 波点图案
@@ -660,19 +775,20 @@ class CanvasWidget(tk.Frame):
             # 上下边框
             for x in range(spacing // 2, canvas_w, spacing):
                 self.canvas.create_oval(x - dot_r, bw // 2 - dot_r, x + dot_r, bw // 2 + dot_r,
-                                       fill=pattern_color, outline='', tags='border')
+                                       fill=pattern_color, outline='', tags='border_image')
                 self.canvas.create_oval(x - dot_r, canvas_h - bw // 2 - dot_r, x + dot_r, canvas_h - bw // 2 + dot_r,
-                                       fill=pattern_color, outline='', tags='border')
+                                       fill=pattern_color, outline='', tags='border_image')
             # 左右边框
             for y in range(bw + spacing // 2, canvas_h - bw, spacing):
                 self.canvas.create_oval(bw // 2 - dot_r, y - dot_r, bw // 2 + dot_r, y + dot_r,
-                                       fill=pattern_color, outline='', tags='border')
+                                       fill=pattern_color, outline='', tags='border_image')
                 self.canvas.create_oval(canvas_w - bw // 2 - dot_r, y - dot_r, canvas_w - bw // 2 + dot_r, y + dot_r,
-                                       fill=pattern_color, outline='', tags='border')
+                                       fill=pattern_color, outline='', tags='border_image')
         
         elif pattern == 'grid':
-            # 网格图案 - 使用 pattern_size 控制间距
+            # 网格图案 - 使用与导出相同的间距公式
             spacing = max(pattern_size, 6)
+            if pattern_size > 10: spacing = pattern_size
             
             # 绘制竖线 (遍历整个宽度)
             for x in range(0, canvas_w, spacing):
@@ -684,22 +800,22 @@ class CanvasWidget(tk.Frame):
                 
                 if x < bw or x > canvas_w - bw:
                     # 左右边框区域: 画整条竖线
-                    self.canvas.create_line(x, 0, x, canvas_h, fill=pattern_color, tags='border')
+                    self.canvas.create_line(x, 0, x, canvas_h, fill=pattern_color, tags='border_image')
                 else:
                     # 中间区域: 只画上下边框的竖线部分
-                    self.canvas.create_line(x, 0, x, bw, fill=pattern_color, tags='border')
-                    self.canvas.create_line(x, canvas_h - bw, x, canvas_h, fill=pattern_color, tags='border')
+                    self.canvas.create_line(x, 0, x, bw, fill=pattern_color, tags='border_image')
+                    self.canvas.create_line(x, canvas_h - bw, x, canvas_h, fill=pattern_color, tags='border_image')
             
             # 绘制横线 (遍历整个高度)
             for y in range(0, canvas_h, spacing):
                 # 逻辑同上
                 if y < bw or y > canvas_h - bw:
                     # 上下边框区域: 画整条横线
-                    self.canvas.create_line(0, y, canvas_w, y, fill=pattern_color, tags='border')
+                    self.canvas.create_line(0, y, canvas_w, y, fill=pattern_color, tags='border_image')
                 else:
                     # 中间区域: 只画左右边框的横线部分
-                    self.canvas.create_line(0, y, bw, y, fill=pattern_color, tags='border')
-                    self.canvas.create_line(canvas_w - bw, y, canvas_w, y, fill=pattern_color, tags='border')
+                    self.canvas.create_line(0, y, bw, y, fill=pattern_color, tags='border_image')
+                    self.canvas.create_line(canvas_w - bw, y, canvas_w, y, fill=pattern_color, tags='border_image')
 
         elif pattern == 'wave':
             # 波浪图案
@@ -715,7 +831,7 @@ class CanvasWidget(tk.Frame):
                 points.append(x)
                 points.append(y)
             if len(points) >= 4:
-                self.canvas.create_line(points, fill=pattern_color, smooth=True, tags='border')
+                self.canvas.create_line(points, fill=pattern_color, smooth=True, tags='border_image')
             
             # 下边框
             points = []
@@ -724,7 +840,7 @@ class CanvasWidget(tk.Frame):
                 points.append(x)
                 points.append(y)
             if len(points) >= 4:
-                self.canvas.create_line(points, fill=pattern_color, smooth=True, tags='border')
+                self.canvas.create_line(points, fill=pattern_color, smooth=True, tags='border_image')
             
             # 左边框
             points = []
@@ -733,7 +849,7 @@ class CanvasWidget(tk.Frame):
                 points.append(x)
                 points.append(y)
             if len(points) >= 4:
-                self.canvas.create_line(points, fill=pattern_color, smooth=True, tags='border')
+                self.canvas.create_line(points, fill=pattern_color, smooth=True, tags='border_image')
             
             # 右边框
             points = []
@@ -742,7 +858,7 @@ class CanvasWidget(tk.Frame):
                 points.append(x)
                 points.append(y)
             if len(points) >= 4:
-                self.canvas.create_line(points, fill=pattern_color, smooth=True, tags='border')
+                self.canvas.create_line(points, fill=pattern_color, smooth=True, tags='border_image')
         
         elif pattern in ('heart', 'club', 'triangle', 'diamond'):
             # 通用几何图形图案
@@ -759,7 +875,7 @@ class CanvasWidget(tk.Frame):
                         cx - icon_size/2, cy + h/2,
                         cx + icon_size/2, cy + h/2
                     ]
-                    self.canvas.create_polygon(pts, fill=pattern_color, outline='', tags='border')
+                    self.canvas.create_polygon(pts, fill=pattern_color, outline='', tags='border_image')
                 
                 elif pattern == 'diamond':
                     r = icon_size / 2
@@ -769,19 +885,19 @@ class CanvasWidget(tk.Frame):
                         cx, cy + r,
                         cx - r, cy
                     ]
-                    self.canvas.create_polygon(pts, fill=pattern_color, outline='', tags='border')
+                    self.canvas.create_polygon(pts, fill=pattern_color, outline='', tags='border_image')
                     
                 elif pattern == 'club':
                     r = icon_size / 3
                     # 三个圆
-                    self.canvas.create_oval(cx-r, cy-r-r, cx+r, cy-r+r, fill=pattern_color, outline='', tags='border')
+                    self.canvas.create_oval(cx-r, cy-r-r, cx+r, cy-r+r, fill=pattern_color, outline='', tags='border_image')
                     # 左下/右下计算略繁琐，简化为固定偏移
                     dx = r * 0.866
                     dy = r * 0.5
-                    self.canvas.create_oval(cx-dx-r, cy+dy-r, cx-dx+r, cy+dy+r, fill=pattern_color, outline='', tags='border')
-                    self.canvas.create_oval(cx+dx-r, cy+dy-r, cx+dx+r, cy+dy+r, fill=pattern_color, outline='', tags='border')
+                    self.canvas.create_oval(cx-dx-r, cy+dy-r, cx-dx+r, cy+dy+r, fill=pattern_color, outline='', tags='border_image')
+                    self.canvas.create_oval(cx+dx-r, cy+dy-r, cx+dx+r, cy+dy+r, fill=pattern_color, outline='', tags='border_image')
                     # 茎
-                    self.canvas.create_polygon(cx, cy, cx-r/3, cy+r*2, cx+r/3, cy+r*2, fill=pattern_color, outline='', tags='border')
+                    self.canvas.create_polygon(cx, cy, cx-r/3, cy+r*2, cx+r/3, cy+r*2, fill=pattern_color, outline='', tags='border_image')
 
                 elif pattern == 'heart':
                     # 简化绘制: 两个圆 + 一个三角形? 或者贝塞尔曲线
@@ -795,7 +911,7 @@ class CanvasWidget(tk.Frame):
                         py = cy - (icon_size/32) * (13 * math.cos(rad) - 5 * math.cos(2*rad) - 2 * math.cos(3*rad) - math.cos(4*rad))
                         pts.append(px)
                         pts.append(py)
-                    self.canvas.create_polygon(pts, fill=pattern_color, outline='', tags='border', smooth=True)
+                    self.canvas.create_polygon(pts, fill=pattern_color, outline='', tags='border_image', smooth=True)
 
             # 沿边框绘制
             # 上下边框
@@ -856,9 +972,9 @@ class CanvasWidget(tk.Frame):
                 )
         
         elif pattern_id == 'dots':
-            # 波点图案
-            spacing = pattern_size * 2
-            dot_radius = pattern_size // 3
+            # 波点图案 - 使用与导出相同的间距公式
+            spacing = max(pattern_size * 2, 8)
+            dot_radius = max(pattern_size // 3, 2)
             for y in range(0, canvas_h + spacing, spacing):
                 offset = (y // spacing) % 2 * (spacing // 2)
                 for x in range(offset, canvas_w + spacing, spacing):
@@ -869,8 +985,9 @@ class CanvasWidget(tk.Frame):
                     )
         
         elif pattern_id == 'grid':
-            # 网格图案
-            spacing = pattern_size * 2
+            # 网格图案 - 使用与导出相同的间距公式
+            spacing = max(pattern_size, 6)
+            if pattern_size > 10: spacing = pattern_size
             for x in range(0, canvas_w, spacing):
                 self.canvas.create_line(
                     x, 0, x, canvas_h,
@@ -883,8 +1000,9 @@ class CanvasWidget(tk.Frame):
                 )
         
         elif pattern_id == 'horizontal':
-            # 横线图案
-            spacing = pattern_size * 2
+            # 横线图案 - 使用与导出相同的间距公式
+            spacing = max(pattern_size, 6)
+            if pattern_size > 10: spacing = pattern_size
             for y in range(0, canvas_h, spacing):
                 self.canvas.create_line(
                     0, y, canvas_w, y,
@@ -892,8 +1010,9 @@ class CanvasWidget(tk.Frame):
                 )
         
         elif pattern_id == 'vertical':
-            # 竖线图案
-            spacing = pattern_size * 2
+            # 竖线图案 - 使用与导出相同的间距公式
+            spacing = max(pattern_size, 6)
+            if pattern_size > 10: spacing = pattern_size
             for x in range(0, canvas_w, spacing):
                 self.canvas.create_line(
                     x, 0, x, canvas_h,
@@ -961,14 +1080,38 @@ class CanvasWidget(tk.Frame):
 
     def show_context_menu(self, event):
         """显示右键菜单"""
-        # 查找下方对象
-        item = self.canvas.find_closest(event.x, event.y)[0]
-        tags = self.canvas.gettags(item)
+        print(f"[DEBUG] Right click at ({event.x}, {event.y})")
+        # 查找下方对象 (与点击选择逻辑一致)
+        items = self.canvas.find_overlapping(event.x - 2, event.y - 2, event.x + 2, event.y + 2)
+        print(f"[DEBUG] Overlapping items: {items}")
         
-        if 'main_image' in tags or 'sticker' in tags:
-            self.selected_item = item
-            # 根据类型调整菜单项（可选）
-            self.context_menu.post(event.x_root, event.y_root)
+        target_item = None
+        for item in reversed(items):
+            tags = self.canvas.gettags(item)
+            print(f"[DEBUG] Item {item} tags: {tags}")
+            if 'sticker' in tags or 'main_image' in tags or 'text_layer' in tags:
+                target_item = item
+                break
+        
+        if target_item:
+            print(f"[DEBUG] Target found: {target_item} {self.canvas.gettags(target_item)}")
+            self.selected_item = target_item
+            
+            # 同时也更新选中状态（显示缩放手柄）
+            self.dragging_item = None # Reset dragging
+            
+            if 'sticker' in self.canvas.gettags(target_item):
+                self.selected_sticker = target_item
+            else:
+                self.selected_sticker = None
+            
+            self._create_scaling_handles(target_item)
+            
+            print(f"[DEBUG] Posting context menu at {event.x_root}, {event.y_root}")
+            # 使用 tk_popup 替代 post，在 macOS 上更稳定
+            self.context_menu.tk_popup(event.x_root, event.y_root)
+        else:
+            print("[DEBUG] No target found for context menu")
 
     def move_to_front(self):
         """置于顶层"""
@@ -1224,6 +1367,13 @@ class CanvasWidget(tk.Frame):
                  self.on_text_interaction('delete')
             self.selected_item = None
             self._hide_scaling_handles()
+            return True
+
+        elif 'main_image' in tags:
+            # [NEW] 支持删除主图片
+            self.clear_main_image()
+            self._hide_scaling_handles()
+            self.selected_item = None
             return True
             
         return False

@@ -310,6 +310,13 @@ BORDER_LINE_STYLES = [
     {'id': 'double', 'name': '双线', 'icon': '═'},
 ]
 
+# 统一的虚线配置 (基准尺寸，基于 800x800 画布)
+# 格式: (实线长度, 间隔长度)
+DASH_PATTERNS = {
+    'dashed': (10, 5),      # 虚线
+    'dotted': (3, 3),       # 点线
+}
+
 
 
 # 背景图案样式
