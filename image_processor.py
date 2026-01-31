@@ -198,7 +198,7 @@ class TextLayer:
         'kaiti': ['/System/Library/Fonts/STKaiti.ttc', '/System/Library/Fonts/Supplemental/STKaiti.ttc', '/Library/Fonts/STKaiti.ttf', 'C:/Windows/Fonts/simkai.ttf'],
         'yuanti': ['/System/Library/Fonts/STYuanti.ttc', '/System/Library/Fonts/Supplemental/STYuanti.ttc', '/Library/Fonts/STYuanti.ttf', 'C:/Windows/Fonts/simyou.ttf'],
         'xingkai': ['/System/Library/Fonts/STXingkai.ttc', '/System/Library/Fonts/Supplemental/STXingkai.ttc', '/Library/Fonts/STXingkai.ttf', 'C:/Windows/Fonts/STXINGKA.TTF'],
-        'weibei': ['/Library/Fonts/WeibeiSC-Bold.otf', '/System/Library/Fonts/Supplemental/WeibeiSC-Bold.otf']
+        'weibei': ['/Library/Fonts/WeibeiSC-Bold.otf', '/System/Library/Fonts/Supplemental/WeibeiSC-Bold.otf', 'C:/Windows/Fonts/simhei.ttf', 'C:/Windows/Fonts/STZHONGS.TTF']
     }
     
     # 字体友好名称映射 (用于UI显示)
@@ -222,7 +222,7 @@ class TextLayer:
         'songti': ['Songti.ttc', 'STSongti.ttc', 'simsun.ttc'],
         'heiti': ['STHeiti Light.ttc', 'STHeiti', 'simhei.ttf'],
         'xingkai': ['STXingkai.ttc', 'STXingkai.ttf', 'STXINGKA.TTF'],
-        'weibei': ['WeibeiSC-Bold.otf']
+        'weibei': ['WeibeiSC-Bold.otf', 'simhei.ttf', 'STZHONGS.TTF']
     }
     
     _font_search_cache = {}

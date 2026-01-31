@@ -12,10 +12,11 @@ from constants import COLORS
 class CanvasWidget(tk.Frame):
     """画布组件"""
     
-    def __init__(self, parent, width=800, height=600):
+    def __init__(self, parent, width=800, height=600, on_text_interaction=None):
         super().__init__(parent, bg=COLORS['bg'])
         self.width = width
         self.height = height
+        self.on_text_interaction = on_text_interaction
         
         # 创建画布 - 无边距，边框靠边
         self.canvas = Canvas(
@@ -121,17 +122,31 @@ class CanvasWidget(tk.Frame):
     def _ensure_layer_order(self):
         """统一管理画布图层顺序：背景 < 图案 < 图片 < 贴纸 < 边框 < 手柄"""
         # 按从底到顶的顺序设置
-        # 1. 背景最底层
-        self.canvas.tag_lower('background_image')
-        # 2. 背景图案
-        self.canvas.tag_raise('background_pattern', 'background_image')
+        # 1. 背景最底层 (如果存在)
+        try:
+            self.canvas.tag_lower('background_image')
+            # 2. 背景图案
+            self.canvas.tag_raise('background_pattern', 'background_image')
+        except:
+            # 如果background_image不存在，只处理background_pattern
+            try:
+                self.canvas.tag_lower('background_pattern')
+            except:
+                pass
+        
         # 3. 内容层 (图片、贴纸、文字) 之间的顺序由用户控制，不在这里强制
         # 4. 边框 (必须在所有内容之上)
         # 找到所有内容元素
         for tag in ['main_image', 'sticker', 'text_layer']:
-            self.canvas.tag_raise('corner_mask', tag)
+            try:
+                self.canvas.tag_raise('corner_mask', tag)
+            except:
+                pass
         
-        self.canvas.tag_raise('border', 'corner_mask')
+        try:
+            self.canvas.tag_raise('border', 'corner_mask')
+        except:
+            pass
         self.canvas.tag_raise('border_image', 'border')
         # 5. 手柄 (必须在边框之上才能点击)
         self.canvas.tag_raise('handle')
@@ -1092,6 +1107,10 @@ class CanvasWidget(tk.Frame):
                 tags=('text_layer',)
             )
             self._ensure_layer_order()
+            
+            # 自动创建缩放柄
+            self.selected_item = self._text_id
+            self._create_scaling_handles(self._text_id)
     
     def set_text_preview(self, config):
         """设置文字预览 (实时)"""
