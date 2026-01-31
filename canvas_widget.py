@@ -120,21 +120,31 @@ class CanvasWidget(tk.Frame):
         self.main_image_id = None
     def _ensure_layer_order(self):
         """统一管理画布图层顺序：背景 < 图案 < 图片 < 贴纸 < 边框 < 手柄"""
+        def tag_exists(tag):
+            return len(self.canvas.find_withtag(tag)) > 0
+        
         # 按从底到顶的顺序设置
         # 1. 背景最底层
-        self.canvas.tag_lower('background_image')
+        if tag_exists('background_image'):
+            self.canvas.tag_lower('background_image')
         # 2. 背景图案
-        self.canvas.tag_raise('background_pattern', 'background_image')
+        if tag_exists('background_pattern') and tag_exists('background_image'):
+            self.canvas.tag_raise('background_pattern', 'background_image')
         # 3. 内容层 (图片、贴纸、文字) 之间的顺序由用户控制，不在这里强制
         # 4. 边框 (必须在所有内容之上)
         # 找到所有内容元素
-        for tag in ['main_image', 'sticker', 'text_layer']:
-            self.canvas.tag_raise('corner_mask', tag)
+        if tag_exists('corner_mask'):
+            for tag in ['main_image', 'sticker', 'text_layer']:
+                if tag_exists(tag):
+                    self.canvas.tag_raise('corner_mask', tag)
         
-        self.canvas.tag_raise('border', 'corner_mask')
-        self.canvas.tag_raise('border_image', 'border')
+        if tag_exists('border') and tag_exists('corner_mask'):
+            self.canvas.tag_raise('border', 'corner_mask')
+        if tag_exists('border_image') and tag_exists('border'):
+            self.canvas.tag_raise('border_image', 'border')
         # 5. 手柄 (必须在边框之上才能点击)
-        self.canvas.tag_raise('handle')
+        if tag_exists('handle'):
+            self.canvas.tag_raise('handle')
 
     def display_image(self, pil_image):
         """显示PIL图片"""
@@ -734,7 +744,7 @@ class CanvasWidget(tk.Frame):
         
         for h_type, (hx, hy) in handle_positions.items():
             h_id = self.canvas.create_rectangle(
-                hx-5, hy-5, hx+5, hy+5,
+                hx-7, hy-7, hx+7, hy+7,
                 fill='#3B82F6', outline='white', width=2, tags='handle'
             )
             self.handles[h_id] = h_type
@@ -760,7 +770,7 @@ class CanvasWidget(tk.Frame):
         
         for h_id, h_type in self.handles.items():
             hx, hy = handle_positions[h_type]
-            self.canvas.coords(h_id, hx-4, hy-4, hx+4, hy+4)
+            self.canvas.coords(h_id, hx-7, hy-7, hx+7, hy+7)
             self.canvas.tag_raise(h_id)
 
     def _hide_scaling_handles(self):
@@ -798,7 +808,7 @@ class CanvasWidget(tk.Frame):
         """画布点击事件 - 增强识别逻辑"""
         # 1. 优先识别缩放手柄 (Handle)
         # 我们使用 find_closest 并限制距离，这比 find_overlapping 在大图层重叠时更可靠
-        closest_items = self.canvas.find_closest(event.x, event.y, halo=3)
+        closest_items = self.canvas.find_closest(event.x, event.y, halo=8)
         if closest_items:
             item = closest_items[0]
             if item in self.handles:
