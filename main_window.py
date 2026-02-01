@@ -170,7 +170,7 @@ class MainWindow(tk.Tk):
         self.text_layers = []  # 文字层列表
         self.current_text_config = {
             'content': '',
-            'font_size': 48,
+            'font_size': 72,
             'color': '#FFFFFF',
             'font_family': 'yuanti',
             'align': 'left',
@@ -1588,14 +1588,14 @@ class MainWindow(tk.Tk):
         
         # 文本框容器
         text_entry_container = tk.Frame(text_frame, bg=COLORS['panel_bg'])
-        text_entry_container.pack(anchor='w', padx=12, pady=(0, 8))
+        text_entry_container.pack(fill=tk.X, padx=12, pady=(0, 8))
         
         self.text_content_entry = tk.Text(text_entry_container, height=4, width=24, font=('SF Pro Text', 10),
                                           bg=COLORS['bg_secondary'], fg=COLORS['text_primary'],
                                           insertbackground=COLORS['text_primary'],
                                           wrap=tk.WORD, highlightthickness=1, 
                                           highlightbackground=COLORS['separator'])
-        self.text_content_entry.pack(side=tk.TOP, anchor='w')
+        self.text_content_entry.pack(fill=tk.X, padx=(0, 20))
         # 实时预览：每次按键更新画布
         self.text_content_entry.bind('<KeyRelease>', lambda e: self._on_text_preview())
         # 高亮检测：仅在换行或移出时触发
@@ -1690,7 +1690,7 @@ class MainWindow(tk.Tk):
         tk.Label(size_frame, text='字号:', font=('SF Pro Text', 10),
                  bg=COLORS['panel_bg'], fg=COLORS['text_secondary']).pack(side=tk.LEFT)
         
-        self.font_size_var = tk.IntVar(value=48)
+        self.font_size_var = tk.IntVar(value=72)
         self.font_size_scale = tk.Scale(size_frame, from_=12, to=120, orient=tk.HORIZONTAL,
                              variable=self.font_size_var, bg=COLORS['panel_bg'], 
                              fg=COLORS['text_primary'], highlightthickness=0,
@@ -1699,7 +1699,7 @@ class MainWindow(tk.Tk):
         self.font_size_scale.pack(side=tk.LEFT, padx=(8, 0))
         self.font_size_scale.bind('<ButtonRelease-1>', lambda e: _on_setting_release("设置字号"))
         
-        self.font_size_label = tk.Label(size_frame, text='48', font=('SF Pro Text', 10),
+        self.font_size_label = tk.Label(size_frame, text='72', font=('SF Pro Text', 10),
                                         bg=COLORS['panel_bg'], fg=COLORS['text_primary'], width=4)
         self.font_size_label.pack(side=tk.LEFT)
         
@@ -2119,7 +2119,12 @@ class MainWindow(tk.Tk):
         export_border_width = 0
         if hasattr(self, 'border_config') and self.border_config.get('id') != 'none':
             export_border_width = int(self.border_config.get('width', 0) * preview_scale)
-            export_border_width += int(10 * preview_scale)  # 额外边距
+            # 对于横版画布，增加额外的边距
+            aspect_ratio = preset_width / preset_height
+            if aspect_ratio >= 1.5:  # 横版画布（如16:9）
+                export_border_width += int(30 * preview_scale)  # 横版增加更多边距
+            else:
+                export_border_width += int(15 * preview_scale)  # 其他画布边距
             
         print(f"[DEBUG] PREVIEW: border_width_raw={self.border_config.get('width')}, export_border_width={export_border_width}")
         
@@ -2337,7 +2342,17 @@ class MainWindow(tk.Tk):
         )
         
         self.text_layers = [text_layer]  # 目前只支持一个文字层
-        self.canvas_widget.set_text_layer(text_layer)
+        # 获取当前边框宽度并传递给set_text_layer
+        border_width = 0
+        if hasattr(self, 'border_config') and self.border_config.get('id') != 'none':
+            border_width = self.border_config.get('width', 0)
+            # 对于横版画布，增加额外的边距
+            aspect_ratio = self.current_size_preset['width'] / self.current_size_preset['height']
+            if aspect_ratio >= 1.5:  # 横版画布（如16:9）
+                border_width += 30  # 横版增加更多边距
+            else:
+                border_width += 15  # 其他画布边距
+        self.canvas_widget.set_text_layer(text_layer, border_width=border_width)
         self.save_history('添加文字')
         self.show_toast('文字已应用')
     
@@ -2684,12 +2699,61 @@ class MainWindow(tk.Tk):
         # 延迟重新应用边框（等待画布更新完成）
         self.after(50, self.reapply_border_after_resize)
         
+        # 重新应用文字并调整字体大小
+        self.after(100, self.readjust_text_after_resize)
+        
         print(f"✓ 尺寸设置: {preset['name']} ({preset['width']}×{preset['height']})")
     
     def reapply_border_after_resize(self):
         """尺寸调整后重新应用边框"""
         if hasattr(self, 'border_config') and self.border_config['width'] > 0:
             self.canvas_widget.apply_custom_border(self.border_config)
+    
+    def readjust_text_after_resize(self):
+        """尺寸调整后重新调整文字"""
+        # 如果有文字内容，重新应用文字并调整字体大小
+        if hasattr(self, 'text_content_entry') and self.text_content_entry.get('1.0', 'end-1c').strip():
+            # 计算适合新画布尺寸的字体大小
+            canvas_width = self.current_size_preset['width']
+            canvas_height = self.current_size_preset['height']
+            
+            # 根据画布尺寸和比例计算合适的字体大小
+            # 基准：1920x1080 使用48px字体
+            base_width = 1920
+            base_height = 1080
+            base_font_size = 72
+            
+            # 计算画布面积比例
+            canvas_area = canvas_width * canvas_height
+            base_area = base_width * base_height
+            area_ratio = (canvas_area / base_area) ** 0.5  # 平方根以保持线性关系
+            
+            # 根据画布比例调整字体大小
+            aspect_ratio = canvas_width / canvas_height
+            
+            # 横版海报（16:9或更宽）字体可以稍大
+            if aspect_ratio >= 1.5:
+                scale_factor = area_ratio * 1.2
+            # 竖版海报（9:16或更高）字体需要适中
+            elif aspect_ratio <= 0.7:
+                scale_factor = area_ratio * 0.9
+            # 接近正方形的画布
+            else:
+                scale_factor = area_ratio
+            
+            # 计算新字体大小，确保在合理范围内
+            # 对于小画布（如证件照），字体不应太小
+            min_font_size = 24 if max(canvas_width, canvas_height) < 500 else 18
+            max_font_size = 72 if min(canvas_width, canvas_height) > 1000 else 48
+            
+            new_font_size = max(min_font_size, min(max_font_size, int(base_font_size * scale_factor)))
+            
+            # 更新字体大小变量
+            if hasattr(self, 'font_size_var'):
+                self.font_size_var.set(new_font_size)
+            
+            # 重新应用文字
+            self._auto_apply_text()
     
     def apply_transform(self, transform_type, angle=None):
         """应用变换操作"""

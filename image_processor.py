@@ -400,6 +400,18 @@ class TextLayer:
         # [FIX] 增加 safe_margin_x (边框防遮挡)
         # [FIX] 减去 image_padding * 2，因为最终图片宽度会加上这些 padding
         # 还要为斜体预留空间 (如果是斜体，宽度会增加)
+        # 根据画布尺寸动态调整边距，确保文字不会太靠近边缘
+        # 增加边距比例，确保文字不会被边框遮盖
+        # 对于横版画布，需要更大的边距
+        aspect_ratio = canvas_width / canvas_height
+        if aspect_ratio >= 1.5:  # 横版画布（如16:9）
+            margin_ratio = 0.12  # 横版使用12%的边距
+        else:
+            margin_ratio = 0.08  # 其他画布使用8%的边距
+            
+        dynamic_margin = max(self.margin, min(canvas_width, canvas_height) * margin_ratio)
+        scaled_dynamic_margin = int(dynamic_margin * scale)
+        
         skew_padding = 0
         if self.italic:
             # 斜体约倾斜 0.2
@@ -407,7 +419,7 @@ class TextLayer:
             # 这里先简单预留一部分，更精确的计算需要知道总高度(目前还不知道)
             skew_padding = int(scaled_font_size * 2 * 0.2) 
             
-        max_text_width = int(canvas_width - (self.margin * 2 * scale) - (safe_margin_x * 2) - (image_padding * 2) - skew_padding)
+        max_text_width = int(canvas_width - (scaled_dynamic_margin * 2) - (safe_margin_x * 2) - (image_padding * 2) - skew_padding)
         max_text_width = max(100, max_text_width) # 最小保底宽度
         
         # 将文本按行拆分，然后对每行进行自动换行
@@ -469,6 +481,9 @@ class TextLayer:
         # 创建渲染画布
         render_width = text_width + padding * 2
         render_height = text_height + padding * 2 + bottom_extra
+        
+        # 计算位置
+        x, y = self._calculate_position(canvas_width, canvas_height, render_width, render_height, scaled_dynamic_margin, safe_margin_x)
         render_img = Image.new('RGBA', (render_width, render_height), (0, 0, 0, 0))
         render_draw = ImageDraw.Draw(render_img)
         
@@ -706,18 +721,15 @@ class TextLayer:
             )
             render_width = new_width
         
-        # 计算在画布上的位置
-        x, y = self._calculate_position(canvas_width, canvas_height, 
-                                         render_width, render_height, scaled_margin, safe_margin_x)
-        
         return render_img, x, y
     
     def _calculate_position(self, canvas_width, canvas_height, text_width, text_height, margin, safe_margin_x=0):
         """计算文字在画布上的位置"""
         # 处理自定义位置 (拖拽后)
         if self.position == 'custom':
-            x = int(self.rel_x * canvas_width)
-            y = int(self.rel_y * canvas_height)
+            # 确保自定义位置不会超出画布边界
+            x = max(margin + safe_margin_x, min(int(self.rel_x * canvas_width), canvas_width - text_width - margin - safe_margin_x))
+            y = max(margin, min(int(self.rel_y * canvas_height), canvas_height - text_height - margin))
             return x, y
             
         # 标准位置处理
@@ -732,13 +744,17 @@ class TextLayer:
         
         # 垂直位置
         if self.position == 'top':
-            y = margin
+            y = margin + safe_margin_x  # 顶部也增加边距，避免被边框遮盖
         elif self.position == 'bottom':
             # 底部额外留出空间，避免太贴边
-            y = canvas_height - text_height - margin * 2 - safe_margin_x # 底部也稍微避让一下边框
+            y = canvas_height - text_height - margin * 2 - safe_margin_x * 2  # 底部也增加边距
 
         else:  # center
             y = (canvas_height - text_height) // 2
+        
+        # 确保文字不会超出画布边界
+        x = max(margin + safe_margin_x, min(x, canvas_width - text_width - margin - safe_margin_x))
+        y = max(margin, min(y, canvas_height - text_height - margin))
         
         return x, y
     

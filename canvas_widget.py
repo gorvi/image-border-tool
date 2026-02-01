@@ -1092,7 +1092,7 @@ class CanvasWidget(tk.Frame):
         
         return (rel_x, rel_y, rel_w, rel_h)
 
-    def set_text_layer(self, text_layer):
+    def set_text_layer(self, text_layer, border_width=0):
         """设置文字层并渲染到画布"""
         # 清除旧的文字层
         self.clear_text_layer()
@@ -1100,9 +1100,9 @@ class CanvasWidget(tk.Frame):
         if not text_layer or not text_layer.content:
             return
         
-        # 渲染文字
+        # 渲染文字，传递边框宽度以确保文字不会被边框遮盖
         from image_processor import TextLayer
-        rendered, x, y = text_layer.render(self.width, self.height, scale=1.0)
+        rendered, x, y = text_layer.render(self.width, self.height, scale=1.0, safe_margin_x=border_width)
         
         if rendered:
             # 转换为 PhotoImage
