@@ -2036,6 +2036,60 @@ class MainWindow(tk.Tk):
         """应用文字样式并保存历史"""
         self._auto_apply_text()
         self.save_history(action_name)
+    
+    def _calculate_optimal_font_size(self, content, canvas_width, canvas_height, font_family):
+        """
+        根据画布尺寸和文字内容动态计算最佳字体大小
+        目标：文字不超过150字时保持合理大小，填满画布的60%-80%
+        """
+        from image_processor import TextLayer
+        from PIL import Image, ImageDraw
+        
+        # 基础参数
+        char_count = len(content.replace('\n', '').strip())
+        
+        # 画布的有效区域（减去安全边距）
+        safe_margin_h = int(canvas_width * 0.10)  # 水平安全边距10%
+        safe_margin_v = int(canvas_height * 0.12)  # 垂直安全边距12%
+        effective_width = canvas_width - safe_margin_h * 2
+        effective_height = canvas_height - safe_margin_v * 2
+        
+        # 根据画布比例调整策略
+        canvas_ratio = canvas_width / canvas_height if canvas_height > 0 else 1
+        
+        # 根据画布尺寸动态计算基础字体大小
+        # 目标：让150字能合理展示在画布中
+        if canvas_ratio >= 1.5:  # 横版
+            base_font_size = int(canvas_height / 16)
+        elif canvas_ratio <= 0.75:  # 竖版
+            base_font_size = int(canvas_width / 14)
+        else:  # 方形
+            base_font_size = int(min(canvas_width, canvas_height) / 15)
+        
+        # 根据文字数量调整
+        # 150字为标准容量，保持合理大小
+        if char_count <= 50:
+            size_adjust = 1.2
+        elif char_count <= 100:
+            size_adjust = 1.1
+        elif char_count <= 150:
+            size_adjust = 1.0
+        elif char_count <= 200:
+            size_adjust = 0.9
+        else:
+            size_adjust = max(0.6, 0.9 - (char_count - 150) * 0.003)
+        
+        optimal_size = int(base_font_size * size_adjust)
+        
+        # 限制字体大小范围
+        min_font_size = 24
+        max_font_size = int(min(canvas_width, canvas_height) / 6)
+        optimal_size = max(min_font_size, min(optimal_size, max_font_size))
+        
+        print(f"[DEBUG] 动态字体计算: 字数={char_count}, 画布={canvas_width}x{canvas_height}, "
+              f"基础={base_font_size}, 调整系数={size_adjust:.2f}, 最终={optimal_size}")
+        
+        return optimal_size
 
     def _auto_apply_text(self):
         """自动应用文字到画布"""
@@ -2062,10 +2116,17 @@ class MainWindow(tk.Tk):
             if getattr(self.current_text_layer, 'position', '') == 'custom':
                 custom_pos = (self.current_text_layer.rel_x, self.current_text_layer.rel_y)
         
+        # 获取当前画布尺寸用于动态计算字体大小
+        preset_width = self.current_size_preset['width']
+        preset_height = self.current_size_preset['height']
+        
+        # 动态计算适合当前画布尺寸的字体大小
+        dynamic_font_size = self._calculate_optimal_font_size(content, preset_width, preset_height, font_family)
+        
         # 创建文字层
         text_layer = TextLayer(
             content=content,
-            font_size=self.font_size_var.get() if hasattr(self, 'font_size_var') else 48,
+            font_size=dynamic_font_size,
             color=self.text_color_var.get() if hasattr(self, 'text_color_var') else '#333333',
             font_family=font_family,
             align=self.text_align_var.get() if hasattr(self, 'text_align_var') else 'left',
@@ -2117,9 +2178,9 @@ class MainWindow(tk.Tk):
         
         # 计算导出尺寸下的边框宽度
         export_border_width = 0
-        if hasattr(self, 'border_config') and self.border_config.get('id') != 'none':
+        if hasattr(self, 'border_config') and self.border_config.get('width', 0) > 0:
             export_border_width = int(self.border_config.get('width', 0) * preview_scale)
-            export_border_width += int(10 * preview_scale)  # 额外边距
+            export_border_width += int(15 * preview_scale)  # 额外边距，确保文字完全在边框内
             
         print(f"[DEBUG] PREVIEW: border_width_raw={self.border_config.get('width')}, export_border_width={export_border_width}")
         
@@ -2683,6 +2744,9 @@ class MainWindow(tk.Tk):
         
         # 延迟重新应用边框（等待画布更新完成）
         self.after(50, self.reapply_border_after_resize)
+        
+        # 延迟重新渲染文字（根据新画布尺寸更新排版）
+        self.after(100, self._auto_apply_text)
         
         print(f"✓ 尺寸设置: {preset['name']} ({preset['width']}×{preset['height']})")
     

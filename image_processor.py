@@ -714,6 +714,22 @@ class TextLayer:
     
     def _calculate_position(self, canvas_width, canvas_height, text_width, text_height, margin, safe_margin_x=0):
         """计算文字在画布上的位置"""
+        canvas_ratio = canvas_width / canvas_height if canvas_height > 0 else 1
+        
+        # 横版海报(16:9)需要更大的安全边距以适应边框
+        # 基础安全边距 (画布尺寸的4-6%)
+        safe_margin_h = int(canvas_width * 0.05)  # 水平安全边距
+        safe_margin_v = int(canvas_height * 0.06)  # 垂直安全边距
+        
+        # 横版海报增加水平安全边距
+        if canvas_ratio > 1.5:
+            safe_margin_h = int(canvas_width * 0.08)
+        
+        # 合并外部传入的安全边距(如边框) - 确保边框宽度被正确应用
+        # safe_margin_x 是边框宽度，需要完全纳入考虑
+        total_safe_margin_h = max(safe_margin_h, safe_margin_x + 10)  # 额外10像素确保不贴边
+        total_safe_margin_v = safe_margin_v
+        
         # 处理自定义位置 (拖拽后)
         if self.position == 'custom':
             x = int(self.rel_x * canvas_width)
@@ -721,24 +737,31 @@ class TextLayer:
             return x, y
             
         # 标准位置处理
-        # 水平位置
+        # 水平位置（居中时也要考虑边框）
         if self.align == 'left':
-            x = margin + safe_margin_x
+            x = margin + total_safe_margin_h
         elif self.align == 'right':
-            x = canvas_width - text_width - margin - safe_margin_x
+            x = canvas_width - text_width - margin - total_safe_margin_h
         else:  # center
-            x = (canvas_width - text_width) // 2
-
+            # 居中时也要考虑边框占用的空间，确保文字在有效区域内居中
+            available_width = canvas_width - total_safe_margin_h * 2
+            if text_width < available_width:
+                x = total_safe_margin_h + (available_width - text_width) // 2
+            else:
+                x = (canvas_width - text_width) // 2
         
-        # 垂直位置
+        # 垂直位置（居中时也要考虑边框）
         if self.position == 'top':
-            y = margin
+            y = margin + total_safe_margin_v
         elif self.position == 'bottom':
-            # 底部额外留出空间，避免太贴边
-            y = canvas_height - text_height - margin * 2 - safe_margin_x # 底部也稍微避让一下边框
-
+            y = canvas_height - text_height - margin - total_safe_margin_v
         else:  # center
-            y = (canvas_height - text_height) // 2
+            # 居中时也要考虑边框占用的空间，确保文字在有效区域内居中
+            available_height = canvas_height - total_safe_margin_v * 2
+            if text_height < available_height:
+                y = total_safe_margin_v + (available_height - text_height) // 2
+            else:
+                y = (canvas_height - text_height) // 2
         
         return x, y
     
