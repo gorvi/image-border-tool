@@ -2,58 +2,128 @@
 常量定义模块
 """
 
-# 预设尺寸
+# 预设尺寸 - 包含推荐的默认字体大小
+# 字体大小计算原则：
+# 1. 基于画布宽度和目标字数计算字体大小
+# 2. 假设每个中文字符占用约字体大小的宽度
+# 3. 每行目标字数：横版约25-30字，竖版约20-25字
+# 4. 字体大小 = (画布宽度 - 边距) / 每行目标字数
+# 5. 确保障碍文字能完整显示目标字数
 SIZE_PRESETS = [
     {
         'id': 'id_photo_1inch',
         'name': '1寸证件照',
         'width': 295,
         'height': 413,
-        'dpi': 300
+        'dpi': 300,
+        'default_font_size': 16,  # 小尺寸画布，小字体
+        'max_chars': 50,
+        'chars_per_line': 12  # 每行约12字
     },
     {
         'id': 'id_photo_2inch',
         'name': '2寸证件照',
         'width': 413,
         'height': 626,
-        'dpi': 300
+        'dpi': 300,
+        'default_font_size': 20,
+        'max_chars': 60,
+        'chars_per_line': 15
     },
     {
         'id': 'square_1_1',
         'name': '正方形 1:1',
         'width': 800,
         'height': 800,
-        'dpi': 72
+        'dpi': 72,
+        'default_font_size': 28,  # (800-80)/25 ≈ 28，可显示100字
+        'max_chars': 100,
+        'chars_per_line': 25
     },
     {
         'id': 'xiaohongshu_3_4',
         'name': '小红书 3:4',
         'width': 1242,
         'height': 1660,
-        'dpi': 72
+        'dpi': 72,
+        'default_font_size': 38,  # (1242-80)/30 ≈ 38，可显示120字
+        'max_chars': 120,
+        'chars_per_line': 30
     },
     {
         'id': 'post_16_9',
         'name': '横版海报 16:9',
         'width': 1920,
         'height': 1080,
-        'dpi': 72
+        'dpi': 72,
+        # 横版海报宽度1920，要显示150字，每行约30字
+        # 字体大小 = (1920 - 160边距) / 30 ≈ 58，但考虑行高和间距，适当减小
+        'default_font_size': 42,  # 可显示150字，每行约40字，共4行
+        'max_chars': 150,
+        'chars_per_line': 40
     },
     {
         'id': 'post_9_16',
         'name': '竖版海报 9:16',
         'width': 1080,
         'height': 1920,
-        'dpi': 72
+        'dpi': 72,
+        # 竖版海报宽度1080，要显示150字，每行约25字
+        'default_font_size': 36,  # (1080-80)/28 ≈ 36，可显示150字
+        'max_chars': 150,
+        'chars_per_line': 28
     },
     {
         'id': 'custom',
         'name': '自定义尺寸',
         'width': 800,
         'height': 800,
-        'dpi': 72
+        'dpi': 72,
+        'default_font_size': 28,
+        'max_chars': 100,
+        'chars_per_line': 25
     }
 ]
+
+# 自动计算字体大小的函数
+def calculate_optimal_font_size(canvas_width, canvas_height, target_chars=150, 
+                                border_width=0, margin=20, chars_per_line=30):
+    """根据画布尺寸和目标字数计算最优字体大小
+    
+    Args:
+        canvas_width: 画布宽度
+        canvas_height: 画布高度
+        target_chars: 目标字数
+        border_width: 边框宽度
+        margin: 边距
+        chars_per_line: 每行目标字数
+        
+    Returns:
+        int: 最优字体大小
+    """
+    # 计算可用宽度（减去边框和边距）
+    safe_margin = border_width + margin
+    available_width = canvas_width - (safe_margin * 2)
+    
+    # 基于每行目标字数计算字体大小
+    # 中文字符宽度约等于字体大小
+    font_size = int(available_width / chars_per_line)
+    
+    # 计算需要多少行
+    lines_needed = (target_chars + chars_per_line - 1) // chars_per_line  # 向上取整
+    
+    # 计算可用高度
+    available_height = canvas_height - (safe_margin * 2)
+    
+    # 基于高度限制调整字体大小（行高约1.5倍字体大小）
+    line_height = int(font_size * 1.5)
+    max_font_size_by_height = int(available_height / lines_needed / 1.5)
+    
+    # 取较小值
+    optimal_font_size = min(font_size, max_font_size_by_height)
+    
+    # 限制在合理范围内
+    return max(16, min(100, optimal_font_size))
 
 # 边框样式
 BORDER_STYLES = [

@@ -10,6 +10,7 @@ import random
 import os
 import sys
 import subprocess
+import math
 from datetime import datetime
 
 from auth_manager import auth  # [AUTH] 导入授权管理器
@@ -168,9 +169,11 @@ class MainWindow(tk.Tk):
         
         # 文字层配置
         self.text_layers = []  # 文字层列表
+        # 根据当前预设获取默认字体大小
+        default_font_size = self.current_size_preset.get('default_font_size', 56)
         self.current_text_config = {
             'content': '',
-            'font_size': 48,
+            'font_size': default_font_size,
             'color': '#FFFFFF',
             'font_family': 'yuanti',
             'align': 'left',
@@ -1621,8 +1624,9 @@ class MainWindow(tk.Tk):
         
         resize_handle.bind('<B1-Motion>', on_resize_drag)
         
-        # 字符计数器
-        self.char_count_label = tk.Label(text_entry_container, text='0 / 150', font=('SF Pro Text', 9),
+        # 字符计数器 - 根据当前预设动态显示最大字符数
+        max_chars = self.current_size_preset.get('max_chars', 150)
+        self.char_count_label = tk.Label(text_entry_container, text=f'0 / {max_chars}', font=('SF Pro Text', 9),
                                          bg=COLORS['panel_bg'], fg=COLORS['text_secondary'])
         self.char_count_label.pack(anchor='e', padx=4)
         
@@ -1690,8 +1694,10 @@ class MainWindow(tk.Tk):
         tk.Label(size_frame, text='字号:', font=('SF Pro Text', 10),
                  bg=COLORS['panel_bg'], fg=COLORS['text_secondary']).pack(side=tk.LEFT)
         
-        self.font_size_var = tk.IntVar(value=48)
-        self.font_size_scale = tk.Scale(size_frame, from_=12, to=120, orient=tk.HORIZONTAL,
+        # 根据当前预设获取默认字体大小
+        initial_font_size = self.current_size_preset.get('default_font_size', 56)
+        self.font_size_var = tk.IntVar(value=initial_font_size)
+        self.font_size_scale = tk.Scale(size_frame, from_=12, to=150, orient=tk.HORIZONTAL,
                              variable=self.font_size_var, bg=COLORS['panel_bg'], 
                              fg=COLORS['text_primary'], highlightthickness=0,
                              troughcolor=COLORS['bg_secondary'], length=100,
@@ -1699,7 +1705,7 @@ class MainWindow(tk.Tk):
         self.font_size_scale.pack(side=tk.LEFT, padx=(8, 0))
         self.font_size_scale.bind('<ButtonRelease-1>', lambda e: _on_setting_release("设置字号"))
         
-        self.font_size_label = tk.Label(size_frame, text='48', font=('SF Pro Text', 10),
+        self.font_size_label = tk.Label(size_frame, text=str(initial_font_size), font=('SF Pro Text', 10),
                                         bg=COLORS['panel_bg'], fg=COLORS['text_primary'], width=4)
         self.font_size_label.pack(side=tk.LEFT)
         
@@ -1897,7 +1903,8 @@ class MainWindow(tk.Tk):
         if hasattr(self, 'text_content_entry') and hasattr(self, 'char_count_label'):
             content = self.text_content_entry.get('1.0', 'end-1c')
             char_count = len(content)
-            max_chars = 150
+            # 根据当前预设获取最大字符数
+            max_chars = self.current_size_preset.get('max_chars', 150)
             
             # 限制最大字符数
             if char_count > max_chars:
@@ -2115,13 +2122,16 @@ class MainWindow(tk.Tk):
         # 计算从画布到导出的缩放比例 (和 batch_export 相同)
         preview_scale = preset_width / cw if cw > 0 else 1.0
         
-        # 计算导出尺寸下的边框宽度
+        # 计算导出尺寸下的边框宽度（水平和垂直）
         export_border_width = 0
+        export_border_height = 0
         if hasattr(self, 'border_config') and self.border_config.get('id') != 'none':
             export_border_width = int(self.border_config.get('width', 0) * preview_scale)
             export_border_width += int(10 * preview_scale)  # 额外边距
+            # 垂直方向也使用相同的边距计算，防止文字压住上下边框
+            export_border_height = export_border_width
             
-        print(f"[DEBUG] PREVIEW: border_width_raw={self.border_config.get('width')}, export_border_width={export_border_width}")
+        print(f"[DEBUG] PREVIEW: border_width_raw={self.border_config.get('width')}, export_border_width={export_border_width}, export_border_height={export_border_height}")
         
         # 强制刷新关键词 (如果是高亮模式且关键词为空)
         if self.highlight_enabled_var.get() and not self._auto_keywords:
@@ -2130,7 +2140,9 @@ class MainWindow(tk.Tk):
         # [关键] 使用导出尺寸渲染，和导出时完全一致
         # [FIX] font_size 已经是预设尺寸下的像素值，所以 render 时 scale 应为 1.0
         # 如果使用 preview_scale (>1)，会导致字号被再次放大
-        text_img, x, y = text_layer.render(preset_width, preset_height, scale=1.0, safe_margin_x=export_border_width)
+        text_img, x, y = text_layer.render(preset_width, preset_height, scale=1.0, 
+                                           safe_margin_x=export_border_width,
+                                           safe_margin_y=export_border_height)
         
         if text_img:
             # 缩小回预览尺寸
@@ -2642,6 +2654,7 @@ class MainWindow(tk.Tk):
     def select_size_preset(self, preset):
         """选择尺寸预设"""
         old_preset_id = self.current_size_preset['id']
+        old_preset = self.current_size_preset
         self.current_size_preset = preset
         self.image_processor.set_canvas_size(preset['width'], preset['height'])
         
@@ -2681,10 +2694,66 @@ class MainWindow(tk.Tk):
         if hasattr(self, 'background_color') and self.background_color:
             self.canvas_widget.set_background_color(self.background_color)
         
-        # 延迟重新应用边框（等待画布更新完成）
+        # 延迟重新应用边框和文字（等待画布更新完成）
         self.after(50, self.reapply_border_after_resize)
         
+        # 根据新尺寸调整文字大小并重新应用文字
+        self._adjust_text_for_new_preset(old_preset, preset)
+        
         print(f"✓ 尺寸设置: {preset['name']} ({preset['width']}×{preset['height']})")
+    
+    def _adjust_text_for_new_preset(self, old_preset, new_preset):
+        """根据新画布尺寸调整文字排版
+        
+        Args:
+            old_preset: 旧的尺寸预设
+            new_preset: 新的尺寸预设
+        """
+        # 检查是否有文字内容
+        if not hasattr(self, 'text_content_entry') or not self.text_content_entry:
+            return
+            
+        content = self.text_content_entry.get('1.0', tk.END).strip()
+        if not content:
+            return
+        
+        # 获取新旧预设的推荐字体大小
+        new_default_font_size = new_preset.get('default_font_size', 56)
+        old_default_font_size = old_preset.get('default_font_size', 56)
+        
+        # 综合调整字体大小
+        if hasattr(self, 'font_size_var'):
+            current_size = self.font_size_var.get()
+            
+            # 计算用户相对于旧默认值的调整比例
+            user_adjustment = current_size / old_default_font_size if old_default_font_size > 0 else 1.0
+            
+            # 新字体大小 = 新预设默认值 * 用户调整比例
+            # 限制调整比例在 0.5 ~ 2.0 之间，避免字体变化过大
+            user_adjustment = max(0.5, min(2.0, user_adjustment))
+            new_size = int(new_default_font_size * user_adjustment)
+            
+            # 限制字体大小范围
+            new_size = max(16, min(150, new_size))
+            self.font_size_var.set(new_size)
+            if hasattr(self, 'font_size_label'):
+                self.font_size_label.config(text=str(new_size))
+        
+        # 重新应用文字
+        self._auto_apply_text()
+        
+        # 更新字符计数器的最大字符数显示
+        if hasattr(self, 'char_count_label'):
+            new_max_chars = new_preset.get('max_chars', 150)
+            content = self.text_content_entry.get('1.0', tk.END).strip() if hasattr(self, 'text_content_entry') else ''
+            char_count = len(content)
+            # 如果当前字符数超过新预设的最大值，截断文本
+            if char_count > new_max_chars:
+                self.text_content_entry.delete('1.0', tk.END)
+                self.text_content_entry.insert('1.0', content[:new_max_chars])
+                char_count = new_max_chars
+                self._auto_apply_text()  # 重新应用截断后的文字
+            self.char_count_label.config(text=f'{char_count} / {new_max_chars}')
     
     def reapply_border_after_resize(self):
         """尺寸调整后重新应用边框"""

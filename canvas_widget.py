@@ -1092,17 +1092,25 @@ class CanvasWidget(tk.Frame):
         
         return (rel_x, rel_y, rel_w, rel_h)
 
-    def set_text_layer(self, text_layer):
-        """设置文字层并渲染到画布"""
+    def set_text_layer(self, text_layer, safe_margin_x=0, safe_margin_y=0):
+        """设置文字层并渲染到画布
+        
+        Args:
+            text_layer: 文字层对象
+            safe_margin_x: 水平安全边距（防止文字压住左右边框）
+            safe_margin_y: 垂直安全边距（防止文字压住上下边框）
+        """
         # 清除旧的文字层
         self.clear_text_layer()
         
         if not text_layer or not text_layer.content:
             return
         
-        # 渲染文字
+        # 渲染文字，传入安全边距
         from image_processor import TextLayer
-        rendered, x, y = text_layer.render(self.width, self.height, scale=1.0)
+        rendered, x, y = text_layer.render(self.width, self.height, scale=1.0, 
+                                           safe_margin_x=safe_margin_x, 
+                                           safe_margin_y=safe_margin_y)
         
         if rendered:
             # 转换为 PhotoImage
@@ -1115,8 +1123,14 @@ class CanvasWidget(tk.Frame):
             )
             self._ensure_layer_order()
     
-    def set_text_preview(self, config):
-        """设置文字预览 (实时)"""
+    def set_text_preview(self, config, safe_margin_x=0, safe_margin_y=0):
+        """设置文字预览 (实时)
+        
+        Args:
+            config: 文字配置字典
+            safe_margin_x: 水平安全边距（防止文字压住左右边框）
+            safe_margin_y: 垂直安全边距（防止文字压住上下边框）
+        """
         if not config.get('content'):
             self.clear_text_layer()
             return
@@ -1141,7 +1155,7 @@ class CanvasWidget(tk.Frame):
             underline=config.get('underline', False)
         )
         
-        self.set_text_layer(text_layer)
+        self.set_text_layer(text_layer, safe_margin_x=safe_margin_x, safe_margin_y=safe_margin_y)
     
     def clear_text_layer(self):
         """清除文字层"""

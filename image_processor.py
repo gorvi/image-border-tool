@@ -363,7 +363,7 @@ class TextLayer:
         print("[DEBUG] 使用 Pillow 默认字体")
         return ImageFont.load_default()
     
-    def render(self, canvas_width, canvas_height, scale=1.0, safe_margin_x=0):
+    def render(self, canvas_width, canvas_height, scale=1.0, safe_margin_x=0, safe_margin_y=0):
         """
         渲染文字为 RGBA 图像
         
@@ -371,6 +371,8 @@ class TextLayer:
             canvas_width: 画布宽度
             canvas_height: 画布高度
             scale: 缩放比例 (用于导出时按分辨率缩放)
+            safe_margin_x: 水平安全边距（防止文字压住左右边框）
+            safe_margin_y: 垂直安全边距（防止文字压住上下边框）
             
         Returns:
             (PIL.Image, x, y): 渲染后的图像和位置
@@ -398,17 +400,20 @@ class TextLayer:
         
         # 自动换行处理：按画布宽度减去边距
         # [FIX] 增加 safe_margin_x (边框防遮挡)
-        # [FIX] 减去 image_padding * 2，因为最终图片宽度会加上这些 padding
+        # [FIX] 增加 safe_margin_y (防止压住上下边框)
+        # 注意：image_padding 是文字图像内部留白，不影响文字区域宽度计算
         # 还要为斜体预留空间 (如果是斜体，宽度会增加)
         skew_padding = 0
         if self.italic:
             # 斜体约倾斜 0.2
-            # 估算增加的宽度：高度 * 0.2
-            # 这里先简单预留一部分，更精确的计算需要知道总高度(目前还不知道)
-            skew_padding = int(scaled_font_size * 2 * 0.2) 
-            
-        max_text_width = int(canvas_width - (self.margin * 2 * scale) - (safe_margin_x * 2) - (image_padding * 2) - skew_padding)
-        max_text_width = max(100, max_text_width) # 最小保底宽度
+            skew_padding = int(scaled_font_size * 0.2) 
+        
+        # 计算最大文字宽度：
+        # 画布宽度 - 左右边距 - 左右安全边距 - 斜体预留
+        # 简化计算，避免过度缩减文字区域
+        total_horizontal_margin = (self.margin * 2 * scale) + (safe_margin_x * 2) + skew_padding
+        max_text_width = int(canvas_width - total_horizontal_margin)
+        max_text_width = max(200, max_text_width) # 最小保底宽度200px
         
         # 将文本按行拆分，然后对每行进行自动换行
         original_lines = self.content.split('\n')
@@ -708,37 +713,105 @@ class TextLayer:
         
         # 计算在画布上的位置
         x, y = self._calculate_position(canvas_width, canvas_height, 
-                                         render_width, render_height, scaled_margin, safe_margin_x)
+                                         render_width, render_height, scaled_margin, 
+                                         safe_margin_x, safe_margin_y)
+        
+        # [FIX] 如果文字图像宽度超出可用区域，需要裁剪
+        available_width = canvas_width - (safe_margin_x * 2)
+        available_height = canvas_height - (safe_margin_y * 2)
+        
+        if render_width > available_width or render_height > available_height:
+            # 计算裁剪区域
+            crop_left = 0
+            crop_top = 0
+            crop_right = min(render_width, available_width)
+            crop_bottom = min(render_height, available_height)
+            
+            # 根据对齐方式调整裁剪位置
+            if self.align == 'right' and render_width > available_width:
+                # 右对齐：裁剪左边
+                crop_left = render_width - available_width
+                crop_right = render_width
+            elif self.align == 'center' and render_width > available_width:
+                # 居中对齐：两边裁剪
+                crop_left = (render_width - available_width) // 2
+                crop_right = crop_left + available_width
+            
+            # 根据垂直位置调整裁剪位置
+            if self.position == 'bottom' and render_height > available_height:
+                # 底部位置：裁剪顶部
+                crop_top = render_height - available_height
+                crop_bottom = render_height
+            elif self.position == 'center' and render_height > available_height:
+                # 垂直居中：两边裁剪
+                crop_top = (render_height - available_height) // 2
+                crop_bottom = crop_top + available_height
+            
+            # 执行裁剪
+            render_img = render_img.crop((crop_left, crop_top, crop_right, crop_bottom))
+            render_width = crop_right - crop_left
+            render_height = crop_bottom - crop_top
+            
+            # 重新计算位置（使用裁剪后的尺寸）
+            x, y = self._calculate_position(canvas_width, canvas_height, 
+                                             render_width, render_height, scaled_margin, 
+                                             safe_margin_x, safe_margin_y)
         
         return render_img, x, y
     
-    def _calculate_position(self, canvas_width, canvas_height, text_width, text_height, margin, safe_margin_x=0):
-        """计算文字在画布上的位置"""
+    def _calculate_position(self, canvas_width, canvas_height, text_width, text_height, margin, 
+                            safe_margin_x=0, safe_margin_y=0):
+        """计算文字在画布上的位置
+        
+        Args:
+            canvas_width: 画布宽度
+            canvas_height: 画布高度
+            text_width: 文字宽度
+            text_height: 文字高度
+            margin: 边距
+            safe_margin_x: 水平安全边距（防止文字压住左右边框）
+            safe_margin_y: 垂直安全边距（防止文字压住上下边框）
+        """
         # 处理自定义位置 (拖拽后)
         if self.position == 'custom':
             x = int(self.rel_x * canvas_width)
             y = int(self.rel_y * canvas_height)
+            # 确保自定义位置也在安全区域内
+            x = max(safe_margin_x, min(x, canvas_width - text_width - safe_margin_x))
+            y = max(safe_margin_y, min(y, canvas_height - text_height - safe_margin_y))
             return x, y
             
         # 标准位置处理
-        # 水平位置
-        if self.align == 'left':
-            x = margin + safe_margin_x
-        elif self.align == 'right':
-            x = canvas_width - text_width - margin - safe_margin_x
-        else:  # center
-            x = (canvas_width - text_width) // 2
-
+        # 计算可用的水平区域（考虑安全边距）
+        available_width = canvas_width - (safe_margin_x * 2)
         
-        # 垂直位置
-        if self.position == 'top':
-            y = margin
-        elif self.position == 'bottom':
-            # 底部额外留出空间，避免太贴边
-            y = canvas_height - text_height - margin * 2 - safe_margin_x # 底部也稍微避让一下边框
-
+        # 水平位置 - 确保文字在安全区域内
+        # 如果文字宽度大于可用宽度，强制左对齐并从安全边距开始
+        if text_width > available_width:
+            x = safe_margin_x
+        elif self.align == 'left':
+            x = safe_margin_x + margin
+        elif self.align == 'right':
+            x = canvas_width - safe_margin_x - margin - text_width
         else:  # center
-            y = (canvas_height - text_height) // 2
+            x = safe_margin_x + (available_width - text_width) // 2
+        
+        # 确保 x 不超出安全区域
+        x = max(safe_margin_x, min(x, canvas_width - text_width - safe_margin_x))
+        
+        # 垂直位置（添加 safe_margin_y 防止压住上下边框）
+        available_height = canvas_height - (safe_margin_y * 2)
+        
+        if self.position == 'top':
+            y = safe_margin_y + margin
+        elif self.position == 'bottom':
+            # 底部位置：从底部往上计算
+            y = canvas_height - safe_margin_y - margin - text_height
+        else:  # center
+            y = safe_margin_y + (available_height - text_height) // 2
+        
+        # 确保 y 不超出安全区域
+        y = max(safe_margin_y, min(y, canvas_height - text_height - safe_margin_y))
         
         return x, y
     
