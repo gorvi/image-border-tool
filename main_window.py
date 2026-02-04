@@ -127,8 +127,9 @@ class MainWindow(tk.Tk):
         }
         
         # 批量文字配置
-        self.batch_text_dir = ''  # 文本目录
-        self.batch_use_text_dir = tk.BooleanVar(value=False)  # 使用文本目录
+        self.batch_text_file = ''  # 文本文件路径（每张图读取一行）
+        self.batch_use_text_file = tk.BooleanVar(value=False)  # 使用文本文件
+        self.batch_text_lines = []  # 存储读取的文本行
         
         # 加载用户设置
         self.load_settings()
@@ -1372,34 +1373,38 @@ class MainWindow(tk.Tk):
                  bg=COLORS['panel_bg'], fg=COLORS['text_primary']).pack(fill=tk.X, padx=12, pady=(12, 4))
         
         # 文本框容器
+        # 文本框和调整大小手柄的容器
         text_entry_container = tk.Frame(text_frame, bg=COLORS['panel_bg'])
         text_entry_container.pack(anchor='w', padx=12, pady=(0, 8))
-        
+
+        # 使用网格布局
+        text_entry_container.columnconfigure(0, weight=1)
+        text_entry_container.rowconfigure(0, weight=1)
+
         self.text_content_entry = tk.Text(text_entry_container, height=4, width=24, font=('SF Pro Text', 10),
                                           bg=COLORS['bg_secondary'], fg=COLORS['text_primary'],
                                           insertbackground=COLORS['text_primary'],
-                                          wrap=tk.WORD, highlightthickness=1, 
+                                          wrap=tk.WORD, highlightthickness=1,
                                           highlightbackground=COLORS['separator'])
-        self.text_content_entry.pack(side=tk.TOP, anchor='w')
+        self.text_content_entry.grid(row=0, column=0, sticky='nsew')
         self.text_content_entry.bind('<KeyRelease>', lambda e: self._on_text_input())
         self._keyword_detect_job = None  # 用于防抖
-        
-        # 调整大小的手柄
-        resize_handle = tk.Label(text_entry_container, text='⋮⋮', font=('SF Pro Text', 8),
+
+        # 调整大小的手柄 - 放在右下角
+        resize_handle = tk.Label(text_entry_container, text='◢', font=('SF Pro Text', 10),
                                  bg=COLORS['bg_tertiary'], fg=COLORS['text_secondary'],
                                  cursor='bottom_right_corner', padx=2, pady=0)
-        resize_handle.pack(side=tk.RIGHT, anchor='se')
-        
+        resize_handle.grid(row=1, column=0, sticky='se', padx=0, pady=0)
+
         # 拖拽调整大小
         def on_resize_drag(event):
-            # 获取文本框当前位置
-            entry_x = self.text_content_entry.winfo_x()
-            entry_y = self.text_content_entry.winfo_y()
-            # 计算新尺寸(相对于文本框左上角)
-            new_w = max(15, (event.x_root - self.text_content_entry.winfo_rootx()) // 8)  # 字符宽度
-            new_h = max(2, (event.y_root - self.text_content_entry.winfo_rooty()) // 16)   # 行高
+            # 计算新尺寸(基于鼠标相对于文本框的位置)
+            new_w = max(15, (event.x_root - self.text_content_entry.winfo_rootx()) // 8)
+            new_h = max(2, (event.y_root - self.text_content_entry.winfo_rooty()) // 16)
             self.text_content_entry.config(width=new_w, height=new_h)
-        
+            # 强制更新布局
+            text_entry_container.update_idletasks()
+
         resize_handle.bind('<B1-Motion>', on_resize_drag)
         
         # 2. 字体设置
@@ -1460,33 +1465,28 @@ class MainWindow(tk.Tk):
         
         self.text_color_var = tk.StringVar(value='#333333')
         
-        # 基础色
-        basic_frame = tk.Frame(color_section, bg=COLORS['panel_bg'])
-        basic_frame.pack(anchor='w', pady=2)
-        basic_colors = ['#333333', '#000000', '#FFFFFF', '#FF2D55', '#FF9500', '#34C759', '#007AFF']
-        for c in basic_colors:
-            cb = tk.Canvas(basic_frame, width=18, height=18, bg=c, highlightthickness=1,
-                          highlightbackground=COLORS['separator'], cursor='hand2')
-            cb.pack(side=tk.LEFT, padx=1)
-            cb.bind('<Button-1>', lambda e, color=c: self.set_text_color(color))
-        
-        # 马卡龙色
+        # 颜色选择区域 - 使用网格布局，每行7个颜色
         from constants import MACARON_COLORS, DOPAMINE_COLORS
-        macaron_frame = tk.Frame(color_section, bg=COLORS['panel_bg'])
-        macaron_frame.pack(anchor='w', pady=2)
-        for c in MACARON_COLORS[:9]:
-            cb = tk.Canvas(macaron_frame, width=18, height=18, bg=c, highlightthickness=1,
+
+        # 基础色 + 多巴胺色（高饱和度）
+        vibrant_colors = ['#333333', '#000000', '#FFFFFF'] + DOPAMINE_COLORS[:11]
+        vibrant_frame = tk.Frame(color_section, bg=COLORS['panel_bg'])
+        vibrant_frame.pack(fill=tk.X, pady=2)
+
+        for i, c in enumerate(vibrant_colors):
+            cb = tk.Canvas(vibrant_frame, width=22, height=22, bg=c, highlightthickness=1,
                           highlightbackground=COLORS['separator'], cursor='hand2')
-            cb.pack(side=tk.LEFT, padx=1)
+            cb.grid(row=i//7, column=i%7, padx=2, pady=2)
             cb.bind('<Button-1>', lambda e, color=c: self.set_text_color(color))
-        
-        # 多巴胺色
-        dopamine_frame = tk.Frame(color_section, bg=COLORS['panel_bg'])
-        dopamine_frame.pack(anchor='w', pady=2)
-        for c in DOPAMINE_COLORS[:9]:
-            cb = tk.Canvas(dopamine_frame, width=18, height=18, bg=c, highlightthickness=1,
+
+        # 马卡龙色（柔和色）
+        macaron_frame = tk.Frame(color_section, bg=COLORS['panel_bg'])
+        macaron_frame.pack(fill=tk.X, pady=2)
+
+        for i, c in enumerate(MACARON_COLORS[:14]):
+            cb = tk.Canvas(macaron_frame, width=22, height=22, bg=c, highlightthickness=1,
                           highlightbackground=COLORS['separator'], cursor='hand2')
-            cb.pack(side=tk.LEFT, padx=1)
+            cb.grid(row=i//7, column=i%7, padx=2, pady=2)
             cb.bind('<Button-1>', lambda e, color=c: self.set_text_color(color))
         
         # 自定义颜色按钮
@@ -1849,18 +1849,33 @@ class MainWindow(tk.Tk):
             self.update_text_preview()
             self.show_toast(f'检测到 {len(unique_keywords)} 个关键词')
     
+    def _get_font_key_from_display(self, display_name):
+        """将字体显示名称转换为字体键名"""
+        from image_processor import TextLayer
+        font_map = TextLayer.FONT_NAMES
+        # 反向查找：通过显示名称找到键名
+        for key, name in font_map.items():
+            if name == display_name:
+                return key
+        # 如果没找到，返回默认值
+        return 'pingfang'
+
     def update_text_preview(self):
         """更新文字预览 (实时)"""
         # 更新字号显示
         if hasattr(self, 'font_size_label'):
             self.font_size_label.config(text=str(self.font_size_var.get()))
         
+        # 获取字体键名（将显示名称转换为键名）
+        font_display_name = self.font_family_var.get() if hasattr(self, 'font_family_var') else '苹方 (默认)'
+        font_family_key = self._get_font_key_from_display(font_display_name)
+        
         # 更新配置
         self.current_text_config = {
             'content': self.text_content_entry.get('1.0', tk.END).strip() if hasattr(self, 'text_content_entry') else '',
             'font_size': self.font_size_var.get() if hasattr(self, 'font_size_var') else 48,
             'color': self.text_color_var.get() if hasattr(self, 'text_color_var') else '#FFFFFF',
-            'font_family': self.font_family_var.get() if hasattr(self, 'font_family_var') else 'pingfang',
+            'font_family': font_family_key,
             'align': self.text_align_var.get() if hasattr(self, 'text_align_var') else 'center',
             'position': self.text_position_var.get() if hasattr(self, 'text_position_var') else 'bottom',
             'margin': self.text_margin_var.get() if hasattr(self, 'text_margin_var') else 20,
@@ -1898,11 +1913,15 @@ class MainWindow(tk.Tk):
             if kw_text:
                 keywords = [k.strip() for k in kw_text.split(',') if k.strip()]
         
+        # 获取字体键名（将显示名称转换为键名）
+        font_display_name = self.font_family_var.get() if hasattr(self, 'font_family_var') else '苹方 (默认)'
+        font_family_key = self._get_font_key_from_display(font_display_name)
+        
         text_layer = TextLayer(
             content=content,
             font_size=self.font_size_var.get(),
             color=self.text_color_var.get(),
-            font_family=self.font_family_var.get(),
+            font_family=font_family_key,
             align=self.text_align_var.get(),
             position=self.text_position_var.get(),
             margin=self.text_margin_var.get(),
@@ -2058,39 +2077,34 @@ class MainWindow(tk.Tk):
         ).pack(anchor='w', pady=(0, 15))
 
         # --- 文字目录设置 ---
-        text_dir_frame = tk.LabelFrame(batch_frame, text='🔤 批量文字', 
+        text_file_frame = tk.LabelFrame(batch_frame, text='🔤 批量文字',
                                        font=('SF Pro Text', 10, 'bold'),
                                        bg=COLORS['panel_bg'], fg=COLORS['text_secondary'],
                                        padx=10, pady=8, bd=1, relief='flat')
-        text_dir_frame.pack(fill=tk.X, padx=12, pady=(0, 12))
-        
-        # 启用文字目录勾选框
-        tk.Checkbutton(text_dir_frame, text='从 .txt 文件读取文字', variable=self.batch_use_text_dir,
+        text_file_frame.pack(fill=tk.X, padx=12, pady=(0, 12))
+
+        # 启用文字文件勾选框
+        tk.Checkbutton(text_file_frame, text='从 .txt 文件读取文字（每行对应一张图）', variable=self.batch_use_text_file,
                       bg=COLORS['panel_bg'], fg=COLORS['text_primary'], font=('SF Pro Text', 10),
                       selectcolor=COLORS['accent'], activebackground=COLORS['panel_bg']
                       ).pack(anchor='w')
-        
-        # 文字目录选择
-        text_dir_select_frame = tk.Frame(text_dir_frame, bg=COLORS['panel_bg'])
-        text_dir_select_frame.pack(fill=tk.X, pady=(4, 0))
-        
-        text_dir_btn = tk.Label(text_dir_select_frame, text='选择文字目录', font=('SF Pro Text', 10),
-                               bg=COLORS['bg_tertiary'], fg=COLORS['text_primary'], padx=8, pady=4, cursor='hand2')
-        text_dir_btn.pack(side=tk.LEFT)
-        text_dir_btn.bind('<Button-1>', lambda e: self.select_text_dir())
-        
-        text_open_btn = tk.Label(text_dir_select_frame, text='打开', font=('SF Pro Text', 10),
+
+        # 文字文件选择
+        text_file_select_frame = tk.Frame(text_file_frame, bg=COLORS['panel_bg'])
+        text_file_select_frame.pack(fill=tk.X, pady=(4, 0))
+
+        text_file_btn = tk.Label(text_file_select_frame, text='选择文本文件', font=('SF Pro Text', 10),
                                 bg=COLORS['bg_tertiary'], fg=COLORS['text_primary'], padx=8, pady=4, cursor='hand2')
-        text_open_btn.pack(side=tk.LEFT, padx=(4, 0))
-        text_open_btn.bind('<Button-1>', lambda e: self.open_directory(self.batch_text_dir))
-        
-        self.text_dir_label = tk.Label(text_dir_frame, text=self.batch_text_dir or '未设置',
+        text_file_btn.pack(side=tk.LEFT)
+        text_file_btn.bind('<Button-1>', lambda e: self.select_text_file())
+
+        self.text_file_label = tk.Label(text_file_frame, text=self.batch_text_file or '未选择文件',
                                        font=('SF Pro Text', 9), bg=COLORS['bg_secondary'],
                                        fg=COLORS['text_secondary'], anchor='w', padx=8, pady=4)
-        self.text_dir_label.pack(fill=tk.X, pady=(4, 0))
-        
-        tk.Label(text_dir_frame, text='提示: 文件名需与图片对应，如 image1.txt',
-                font=('SF Pro Text', 8), bg=COLORS['panel_bg'], fg=COLORS['text_tertiary']
+        self.text_file_label.pack(fill=tk.X, pady=(4, 0))
+
+        tk.Label(text_file_frame, text='💡 建议：每行文字控制在20-50字之间，排版效果最佳',
+                font=('SF Pro Text', 9), bg=COLORS['panel_bg'], fg=COLORS['accent']
                 ).pack(anchor='w', pady=(4, 0))
 
         # --- 随机化选项区域 ---
@@ -2679,13 +2693,25 @@ class MainWindow(tk.Tk):
             self.output_dir_label.config(text=dir_path)
             self.save_settings()
     
-    def select_text_dir(self):
-        """选择文字目录"""
-        dir_path = filedialog.askdirectory(title='选择文字目录 (包含 .txt 文件)', initialdir=self.batch_text_dir or None)
-        if dir_path:
-            self.batch_text_dir = dir_path
-            if hasattr(self, 'text_dir_label'):
-                self.text_dir_label.config(text=dir_path)
+    def select_text_file(self):
+        """选择文本文件"""
+        file_path = filedialog.askopenfilename(
+            title='选择文本文件 (.txt)',
+            filetypes=[('文本文件', '*.txt'), ('所有文件', '*.*')],
+            initialdir=os.path.dirname(self.batch_text_file) if self.batch_text_file else None
+        )
+        if file_path:
+            self.batch_text_file = file_path
+            if hasattr(self, 'text_file_label'):
+                self.text_file_label.config(text=file_path)
+            # 读取文件内容
+            try:
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    self.batch_text_lines = [line.strip() for line in f.readlines() if line.strip()]
+                self.batch_log(f"✓ 已加载文本文件: {len(self.batch_text_lines)} 行")
+            except Exception as e:
+                self.batch_log(f"✗ 读取文本文件失败: {e}")
+                self.batch_text_lines = []
             self.save_settings()
     
     def show_toast(self, message, duration=2000):
@@ -3061,30 +3087,21 @@ class MainWindow(tk.Tk):
                 
                 # 6. 添加文字层
                 text_content = None
-                
-                # 方式1: 从文本目录读取对应的 .txt 文件
-                if self.batch_use_text_dir.get() and self.batch_text_dir:
-                    base_name = os.path.splitext(filename)[0]
-                    txt_path = os.path.join(self.batch_text_dir, base_name + '.txt')
-                    
-                    if os.path.exists(txt_path):
-                        try:
-                            with open(txt_path, 'r', encoding='utf-8') as f:
-                                text_content = f.read().strip()
-                            self.batch_log(f"  文字: 从 {base_name}.txt 读取")
-                        except Exception as e:
-                            self.batch_log(f"  文字: 读取失败 - {e}")
+
+                # 方式1: 从文本文件按行读取（每张图对应一行）
+                if self.batch_use_text_file.get() and self.batch_text_file and self.batch_text_lines:
+                    if img_index < len(self.batch_text_lines):
+                        text_content = self.batch_text_lines[img_index]
+                        char_count = len(text_content)
+                        self.batch_log(f"  文字: 第 {img_index + 1} 行 ({char_count} 字)")
+                        # 字数提示
+                        if char_count < 20:
+                            self.batch_log(f"  ⚠️ 提示: 当前 {char_count} 字，建议20-50字排版效果更佳")
+                        elif char_count > 50:
+                            self.batch_log(f"  ⚠️ 提示: 当前 {char_count} 字，建议控制在50字以内")
                     else:
-                        # 尝试 default.txt
-                        default_txt = os.path.join(self.batch_text_dir, 'default.txt')
-                        if os.path.exists(default_txt):
-                            try:
-                                with open(default_txt, 'r', encoding='utf-8') as f:
-                                    text_content = f.read().strip()
-                                self.batch_log(f"  文字: 使用 default.txt")
-                            except:
-                                pass
-                
+                        self.batch_log(f"  ⚠️ 警告: 文本行数不足，第 {img_index + 1} 张图无对应文字")
+
                 # 方式2: 使用编辑器中的文字配置 (如果没有从文件读取)
                 elif self.text_layers and len(self.text_layers) > 0:
                     text_layer = self.text_layers[0]

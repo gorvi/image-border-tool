@@ -1072,6 +1072,13 @@ class CanvasWidget(tk.Frame):
 
     def set_text_layer(self, text_layer):
         """设置文字层并渲染到画布"""
+        # 检查文字层是否当前被选中
+        was_selected = False
+        if self.selected_item:
+            tags = self.canvas.gettags(self.selected_item)
+            if 'text_layer' in tags:
+                was_selected = True
+        
         # 清除旧的文字层
         self.clear_text_layer()
         
@@ -1092,6 +1099,11 @@ class CanvasWidget(tk.Frame):
                 tags=('text_layer',)
             )
             self._ensure_layer_order()
+            
+            # 如果之前被选中，更新引用并重绘手柄
+            if was_selected:
+                self.selected_item = self._text_id
+                self._create_scaling_handles(self._text_id)
     
     def set_text_preview(self, config):
         """设置文字预览 (实时)"""
